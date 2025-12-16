@@ -1,50 +1,53 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# GEMINI (Agent Guidelines)
 
-## Core Principles
+**Legato OCR Exel converter** 프로젝트를 위한 Gemini 에이전트 작업 가이드입니다.
+`claude.md`의 워크플로우 효율성과 `AGENTS.md`의 코드 품질 기준을 통합하여 작성되었습니다.
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+---
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+## 1. 기본 원칙 (GENERAL RULES)
+- **한국어 대응**: 모든 대화, 커밋 메시지, Task, 스크래치패드는 **한국어**로 작성합니다.
+- **간결함 (Conciseness)**: 시니어 개발자 톤으로 필요한 정보만 간결하게 설명합니다. (가정과 결론 분리)
+- **안전 우선**: DB 파괴적 변경, 비밀키 커밋, 검증되지 않은 외부 라이브러리 추가를 금지합니다.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+---
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+## 2. 작업 워크플로우 (WORKFLOW)
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### 2.1 파일 조작 및 탐색
+- **도구 사용**: `list_dir` → `find_by_name`/`grep_search` → `view_file` 순서로 탐색하여 토큰을 절약합니다.
+- **편집 원칙**: 파일 전체를 다시 쓰지 말고, `replace_file_content` 등을 사용하여 **변경된 부분만 수정**합니다.
+- **기록**: 모든 작업 진행 상황과 변경 로그는 `.claude/scratchpad.md` 파일에 기록합니다.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+### 2.2 커밋 프로세스
+사용자가 "커밋 해줘"라고 명시적으로 요청할 때만 수행합니다.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+1. `git add .` (전체 스테이징)
+2. `.claude/scratchpad.md` 업데이트 (작업 내역 한글 기록)
+3. **Conventional Commits** 규칙 적용 (한글 메시지)
+   - 예: `feat(parser): 엑셀 변환 로직 최적화`
+4. `git commit` & `git push`
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+---
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+## 3. 코드 품질 및 리뷰 기준 (QUALITY & REVIEW)
 
-## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
+### 3.1 핵심 점검 사항 (Focus Areas)
+- **데이터 무결성**: 파일 입출력 시 예외 처리 및 데이터 유실 방지.
+- **코드 모듈화**: 하나의 함수가 하나의 역할만 수행하도록 분리.
+- **시뮬레이터 호환성**: (제거됨 - 해당사항 없음)
+- **테스트**: 주요 로직에 대한 단위 테스트 권장.
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+### 3.2 심각도별 가이드 (Severity Levels)
+- **P0 (Critical)**: 보안 위협(API Key 노출), 데이터 손실 유발 코드. **즉시 수정**.
+- **P1 (High)**: 에러 처리 미흡(`try-catch` 부재), 비효율적인 반복문. **PR 전 수정**.
+- **P2 (Medium)**: 중복 코드, 하드코딩된 값, 주석 부족. **수정 권장**.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+---
+
+## 4. PHASE 완료 보고 양식
+작업 단위(PHASE)가 끝날 때마다 다음 3가지를 정리하여 보고합니다.
+
+1. **핵심 기대 동작**: 구현한 기능이 무엇이며, 성공 기준은 무엇인가.
+2. **검증 방법**: 어떻게 동작을 확인했는가.
+3. **기술적 배경**: 주요 코드 변경 사항과 그 이유.
