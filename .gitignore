@@ -1,3 +1,5 @@
+._*
+**/._*
 venv/
 .env
 __pycache__/
@@ -5,4 +7,3 @@ __pycache__/
 .DS_Store
 .specify/
 spec-kit/
-._*

@@ -48,7 +48,14 @@ if not os.getenv("GEMINI_API_KEY"):
     if api_key_input:
         os.environ["GEMINI_API_KEY"] = api_key_input
 
-uploaded_file = st.file_uploader("Upload Document Image", type=['png', 'jpg', 'jpeg'])
+st.write("### 📤 문서 이미지 업로드")
+st.caption("지원 형식: **PNG, JPG, JPEG** (파일을 아래 영역으로 드래그 앤 드롭하세요)")
+
+uploaded_file = st.file_uploader(
+    "Upload Document Image", 
+    type=['png', 'jpg', 'jpeg'], 
+    label_visibility="collapsed"
+)
 
 if uploaded_file is not None:
     # Preview

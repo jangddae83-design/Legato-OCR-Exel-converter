@@ -17,10 +17,12 @@
 
 ### Next Steps
 - [x] 실행 테스트 (API Key 설정 완료, Gemini 3 Pro Preview 모델 적용).
+- [x] 배포 가이드 문서 작성 (DEPLOYMENT.md, README.md).
 - [ ] Gemini Prompt 튜닝 (실제 이미지 테스트 후 필요 시).
 - [ ] 복잡한 레이아웃 (병합된 헤더 등) 검증.
 
 ### Issues / Notes
+- Streamlit Cloud 배포를 위한 `requirements.txt` 버전 고정 완료.
 - `gemini-3.0-pro` 모델명 오류 수정 -> `gemini-3-pro-preview`로 변경.
 - Pydantic 모델 스키마 오류 수정 (기본값 제거 및 프롬프트 강화).
 - API Key 설정 완료 (`.env` 생성). Git에 커밋되지 않도록 주의.
