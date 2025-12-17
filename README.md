@@ -24,16 +24,27 @@ source venv/bin/activate  # Mac/Linux
 pip install -r requirements.txt
 ```
 
-### 2. API 키 설정
-`.env.example` 파일을 복사하여 `.env` 파일을 만들고 Gemini API 키를 입력하세요.
+### 2. 비밀번호 및 API 키 설정
+앱 보안을 위해 `.streamlit/secrets.toml` 파일을 사용하여 비밀번호와 API 키를 관리합니다.
+`.streamlit/secrets.toml.example` 파일을 복사하여 설정하세요.
+
 ```bash
-cp .env.example .env
+mkdir -p .streamlit
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 ```
-`.env` 파일 내용:
-```ini
-GEMINI_API_KEY=your_api_key_here
-GEMINI_MODEL_NAME=gemini-3-pro-preview
+
+**설정 파일 (`.streamlit/secrets.toml`) 예시:**
+```toml
+[general]
+APP_PASSWORD = "admin" # 원하는 비밀번호로 변경하세요
+
+GEMINI_API_KEY = "your_api_key_here"
+GEMINI_MODEL_NAME = "gemini-3-pro-preview"
 ```
+
+✅ **기능**:
+- **비밀번호 로그인**: 설정한 `APP_PASSWORD` 입력 시 주인장(Master) 권한으로 로그인 (저장된 API 키 사용).
+- **게스트 로그인**: 친구가 자신의 API 키(`AIza...`)를 입력하면 게스트(Guest) 권한으로 로그인.
 
 ### 3. 실행하기 (Run Locally)
 ```bash

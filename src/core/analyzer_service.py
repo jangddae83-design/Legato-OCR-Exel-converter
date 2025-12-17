@@ -14,7 +14,7 @@ MOCK_RESPONSE = {
     ]
 }
 
-def analyze_image(image_bytes: bytes, api_key: Optional[str] = None) -> TableLayout:
+def analyze_image(image_bytes: bytes, mime_type: str = "image/png", model_name: str = "gemini-1.5-pro", api_key: Optional[str] = None) -> TableLayout:
     """
     Analyzes the image using Gemini 3 Pro and returns the structural layout.
     """
@@ -26,14 +26,7 @@ def analyze_image(image_bytes: bytes, api_key: Optional[str] = None) -> TableLay
     genai.configure(api_key=key)
     
     # Model configuration
-    # Note: Using a model name that supports vision and structured output.
-    # 'gemini-1.5-pro' is current stable for vision. 'gemini-3-pro' per user request if available.
-    # I'll use 'gemini-2.0-flash-exp' or 'gemini-1.5-pro' as fallback if 3 is not out.
-    # User asked for "Gemini 3 Pro", I will try to use the name 'gemini-3-pro' but likely fallback or user specific.
-    # Actually, as of late 2024/2025 (current time in metadata is 2025!), Gemini 3 Pro might be available.
-    # I will verify or allow configuration.
-    
-    model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro") 
+    # Validated model name passed from caller (app.py)
     
     model = genai.GenerativeModel(model_name)
     
@@ -59,10 +52,8 @@ def analyze_image(image_bytes: bytes, api_key: Optional[str] = None) -> TableLay
 
     try:
         # Prepare image parts
-        # google-generativeai expects specific format. 
-        # Assuming bytes can be passed as blob.
         image_part = {
-            "mime_type": "image/png", # simplified, assuming png/jpg compatible
+            "mime_type": mime_type, 
             "data": image_bytes
         }
         

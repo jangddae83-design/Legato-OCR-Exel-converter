@@ -42,10 +42,15 @@ def render_excel(layout: TableLayout) -> bytes:
             # For simplicity, we just formatted the top-left logic above. 
             # Ideally verify borders on edges of merged range.
     
+    from openpyxl.utils import get_column_letter
+    
     # Auto-adjust column widths (rough approximation)
     for col in ws.columns:
         max_length = 0
-        column = col[0].column_letter # Get the column name
+        # col is a tuple of cells. Even if merged, openpyxl iterates them.
+        # But 'MergedCell' objects don't have all attributes.
+        # Safest way: get letter from the index of the first cell (which implies column index).
+        column = get_column_letter(col[0].column)
         for cell in col:
             try:
                 if len(str(cell.value)) > max_length:
