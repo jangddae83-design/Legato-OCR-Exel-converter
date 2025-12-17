@@ -21,16 +21,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+import hashlib
+import hmac
+
 # --- Caching Wrapper ---
 @st.cache_data(show_spinner=False, ttl=3600, max_entries=100)
-def get_cached_analysis(image_bytes: bytes, mime_type: str, model_name: str, auth_scope: str, prompt_version: str, _api_key: str):
+def get_cached_analysis(image_bytes: bytes, mime_type: str, model_name: str, cache_seed: str, prompt_version: str, _api_key: str):
     """
     Cached wrapper for image analysis.
     - image_bytes, mime_type: The content.
     - model_name: The model version.
-    - auth_scope: "master" or "guest" (Partitions the cache).
-    - prompt_version: Manual cache invalidation key (e.g. "v1").
-    - _api_key: Excluded from cache key (starts with underscore).
+    - cache_seed: "master_shared" OR HMAC(api_key). Ensures cached data is strictly isolated per user/scope.
+    - prompt_version: Manual cache invalidation key.
+    - _api_key: Excluded from cache key (starts with underscore), used only for API call.
     """
     return analyze_image(image_bytes, mime_type=mime_type, model_name=model_name, api_key=_api_key)
 
@@ -102,13 +105,23 @@ def main():
                         model_name = st.secrets["general"].get("GEMINI_MODEL_NAME")
                     if not model_name:
                         model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3-pro-preview")
-                    auth_scope = st.session_state["auth_user_type"]
                     
+                    auth_user_type = st.session_state["auth_user_type"]
+                    
+                    # Determine Cache Seed (Security: Isolation)
+                    if auth_user_type == "master":
+                        cache_seed = "master_shared"
+                    else:
+                        # Guest: Generate HMAC based Seed using Server Secret
+                        # This prevents guests from guessing cache keys or sharing data by accident
+                        secret = st.secrets.get("APP_PASSWORD") or st.secrets.get("general", {}).get("APP_PASSWORD") or "default_salt"
+                        cache_seed = hmac.new(secret.encode(), api_key.encode(), hashlib.sha256).hexdigest()
+
                     layout_data = get_cached_analysis(
                         image_bytes=image_bytes,
                         mime_type=mime_type,
                         model_name=model_name,
-                        auth_scope=auth_scope,
+                        cache_seed=cache_seed,
                         prompt_version="v1",
                         _api_key=api_key
                     )

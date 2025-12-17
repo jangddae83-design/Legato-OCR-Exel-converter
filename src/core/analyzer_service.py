@@ -4,6 +4,10 @@ import google.generativeai as genai
 from typing import Optional
 from src.core.models import TableLayout, CellData
 import typing_extensions as typing
+import threading
+
+# Global Lock for API Safety
+API_LOCK = threading.Lock()
 
 # Fallback/Mock response for testing without API key
 MOCK_RESPONSE = {
@@ -14,6 +18,20 @@ MOCK_RESPONSE = {
     ]
 }
 
+ANALYSIS_PROMPT = """
+Analyze this image containing a table working as a Optical Character Recognition (OCR) engine. 
+Extract the table structure and content into a JSON format.
+Return an object satisfying the `TableLayout` schema.
+
+For each cell:
+- Identify the text content.
+- Identify the starting row_index and col_index (0-based).
+- Identify row_span and col_span. You MUST provide these values for every cell (use 1 for single cells).
+- If a cell is merged, only output it once with the correct span.
+
+Ensure all visible text is captured.
+"""
+
 def analyze_image(image_bytes: bytes, mime_type: str = "image/png", model_name: str = "gemini-1.5-pro", api_key: Optional[str] = None) -> TableLayout:
     """
     Analyzes the image using Gemini 3 Pro and returns the structural layout.
@@ -22,28 +40,6 @@ def analyze_image(image_bytes: bytes, mime_type: str = "image/png", model_name: 
     if not key:
         print("Warning: No API Key provided. Returning mock data.")
         return TableLayout(**MOCK_RESPONSE)
-
-    genai.configure(api_key=key)
-    
-    # Model configuration
-    # Validated model name passed from caller (app.py)
-    
-    model = genai.GenerativeModel(model_name)
-    
-    prompt = """
-    Analyze this image containing a table working as a Optical Character Recognition (OCR) engine. 
-    Extract the table structure and content into a JSON format.
-    Return an object satisfying the `TableLayout` schema.
-    
-    For each cell:
-    - Identify the text content.
-    - Identify the starting row_index and col_index (0-based).
-    - Identify row_span and col_span. You MUST provide these values for every cell (use 1 for single cells).
-    - If a cell is merged, only output it once with the correct span.
-    
-    Ensure all visible text is captured.
-    """
-    
     # Structured output configuration
     generation_config = genai.GenerationConfig(
         response_mime_type="application/json",
@@ -51,16 +47,27 @@ def analyze_image(image_bytes: bytes, mime_type: str = "image/png", model_name: 
     )
 
     try:
-        # Prepare image parts
+        # Prepare image parts (Outside Lock to save time)
         image_part = {
             "mime_type": mime_type, 
             "data": image_bytes
         }
         
-        response = model.generate_content(
-            [prompt, image_part],
-            generation_config=generation_config
-        )
+        # CRITICAL: Serialized API Access for Thread Safety
+        # genai.configure() is global. We must lock to prevent one user's key from being used by another's request.
+        if API_LOCK.acquire(timeout=30):
+            try:
+                genai.configure(api_key=key)
+                model = genai.GenerativeModel(model_name)
+                
+                response = model.generate_content(
+                    [ANALYSIS_PROMPT, image_part],
+                    generation_config=generation_config
+                )
+            finally:
+                API_LOCK.release()
+        else:
+            raise TimeoutError("Server is busy. Please try again later.")
         
         json_text = response.text
         # Parse JSON to Pydantic

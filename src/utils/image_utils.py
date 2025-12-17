@@ -1,12 +1,17 @@
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import io
 import streamlit as st
+import warnings
 from typing import Tuple, Optional
 
 # Constants
 MAX_IMAGE_PIXELS = 80_000_000 # 80MP (Limit decompression bombs)
 MAX_FILE_SIZE_MB = 20
 ALLOWED_MIME_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"]
+
+# Global Safety Configuration (Applies on Import)
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+warnings.simplefilter('error', Image.DecompressionBombWarning)
 
 def validate_and_process_image(uploaded_file) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     """
@@ -32,9 +37,6 @@ def validate_and_process_image(uploaded_file) -> Tuple[Optional[bytes], Optional
         # Open image from bytes
         image = Image.open(io.BytesIO(image_bytes))
         
-        # Safety: Limit pixels for Decompression Bomb protection
-        Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
-        
         # Verify (checks headers and structural integrity)
         image.verify()
         
@@ -58,5 +60,9 @@ def validate_and_process_image(uploaded_file) -> Tuple[Optional[bytes], Optional
             
         return image_bytes, mime_type, None
 
+    except Image.DecompressionBombWarning:
+        return None, None, "Security Error: Image exceeds pixel limit (Potential Decompression Bomb)."
+    except UnidentifiedImageError:
+        return None, None, "Invalid image file. Could not identify text format."
     except Exception as e:
-        return None, None, f"Invalid image file. Validation failed: {str(e)}"
+        return None, None, f"Image validation failed: {str(e)}"

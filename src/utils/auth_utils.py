@@ -75,8 +75,6 @@ def login(user_input: str) -> bool:
 
     # 3. Verify Master Password (HMAC for timing attack protection)
     if master_password and hmac.compare_digest(user_input.encode("utf-8"), master_password.encode("utf-8")):
-        st.session_state["auth_status"] = True
-        st.session_state["auth_user_type"] = "master"
         
         # Load API Key from secrets
         api_key = st.secrets.get("GEMINI_API_KEY")
@@ -84,12 +82,17 @@ def login(user_input: str) -> bool:
              api_key = st.secrets["general"].get("GEMINI_API_KEY")
              
         if api_key:
+            # Login Success: Only set True here
+            st.session_state["auth_status"] = True
+            st.session_state["auth_user_type"] = "master"
             st.session_state["api_key"] = api_key
             st.session_state["failed_attempts"] = 0
             st.rerun()
             return True
         else:
+            # Login Failed: Key missing despite correct password
             st.error("System Error: GEMINI_API_KEY not found in secrets.")
+            handle_failed_attempt() # Treat as failure? Or just error. Let's not lockout master for system error, but don't login.
             return False
 
     # 4. Verify Guest Key (Regex)
