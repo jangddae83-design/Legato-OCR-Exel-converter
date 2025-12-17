@@ -37,6 +37,15 @@ def get_cached_analysis(image_bytes: bytes, mime_type: str, model_name: str, cac
     """
     return analyze_image(image_bytes, mime_type=mime_type, model_name=model_name, api_key=_api_key)
 
+import pandas as pd
+import io
+
+# --- Helper Callback ---
+def reset_state():
+    """Reset conversion result when file changes."""
+    if "conversion_result" in st.session_state:
+        st.session_state["conversion_result"] = None
+
 # --- Main App ---
 def main():
     st.markdown("<h1 class='main-header'>Smart Layout OCR to Excel</h1>", unsafe_allow_html=True)
@@ -79,7 +88,9 @@ def main():
 
     uploaded_file = st.file_uploader(
         "Upload Document Image", 
-        type=['png', 'jpg', 'jpeg', 'webp']
+        type=['png', 'jpg', 'jpeg', 'webp'],
+        key="uploader",
+        on_change=reset_state
     )
 
     if uploaded_file is not None:
@@ -90,10 +101,14 @@ def main():
             st.error(f"❌ {error}")
             return
 
-        # Preview
+        # Preview (Persistent)
         st.image(uploaded_file, caption=f"Uploaded Image ({mime_type})", use_container_width=True)
         
+        # Action Button
         if st.button("Convert to Excel"):
+            # Reset previous result immediately before processing
+            reset_state()
+            
             with st.status("Processing...", expanded=True) as status:
                 st.write("🔍 Analyzing Layout with Gemini...")
                 
@@ -113,7 +128,6 @@ def main():
                         cache_seed = "master_shared"
                     else:
                         # Guest: Generate HMAC based Seed using Server Secret
-                        # This prevents guests from guessing cache keys or sharing data by accident
                         secret = st.secrets.get("APP_PASSWORD") or st.secrets.get("general", {}).get("APP_PASSWORD") or "default_salt"
                         cache_seed = hmac.new(secret.encode(), api_key.encode(), hashlib.sha256).hexdigest()
 
@@ -131,19 +145,47 @@ def main():
                     
                     excel_bytes = render_excel(layout_data)
                     
-                    status.update(label="Conversion Complete!", state="complete", expanded=False)
-                    st.success("Your Excel file is ready!")
+                    # Generate Preview DataFrame (Limit to top 100 rows for performance)
+                    try:
+                        preview_df = pd.read_excel(io.BytesIO(excel_bytes), nrows=100)
+                    except Exception:
+                        preview_df = None # Fallback if pandas fails to read generated excel
                     
-                    st.download_button(
-                        label="Download Excel File",
-                        data=excel_bytes,
-                        file_name="Converted_Result.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                    # Store result in Session State for Persistence
+                    st.session_state["conversion_result"] = {
+                        "excel_bytes": excel_bytes,
+                        "preview_df": preview_df
+                    }
+                    
+                    status.update(label="Conversion Complete!", state="complete", expanded=False)
+                    st.success("Your Excel file is ready! See preview below.")
                     
                 except Exception as e:
                     status.update(label="Error Occurred", state="error")
                     st.error(f"Failed to convert. Please check your API usage or file content.\nDetails: {str(e)}")
+
+        # Result Section (Persistent)
+        if st.session_state.get("conversion_result"):
+            st.divider()
+            st.write("### 📊 엑셀 미리보기")
+            
+            result_data = st.session_state["conversion_result"]
+            preview_df = result_data.get("preview_df")
+            excel_bytes = result_data.get("excel_bytes")
+            
+            if preview_df is not None:
+                st.warning("⚠️ **미리보기는 상위 100행만 표시됩니다.** 전체 내용은 다운로드하여 확인하세요.")
+                st.dataframe(preview_df, use_container_width=True)
+            else:
+                st.warning("⚠️ 미리보기를 불러올 수 없습니다. 다운로드하여 확인해주세요.")
+            
+            st.download_button(
+                label="📥 Download Excel File",
+                data=excel_bytes,
+                file_name="Converted_Result.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_btn"
+            )
 
 if __name__ == "__main__":
     main()
