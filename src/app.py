@@ -31,7 +31,7 @@ def load_normalized_image_bytes(image_bytes: bytes) -> bytes:
 st.set_page_config(
     page_title="Smart Layout OCR (S-LOE)",
     page_icon="📄",
-    layout="centered"
+    layout="wide" # CHANGED: Wide mode for split view
 )
 
 # Custom CSS
@@ -39,8 +39,9 @@ st.markdown("""
 <style>
     .main-header { font-family: 'Inter', sans-serif; color: #1a73e8; text-align: center; font-weight: 700; }
     .sub-header { font-family: 'Inter', sans-serif; color: #5f6368; text-align: center; margin-bottom: 2rem; }
-    .stButton>button { background-color: #1a73e8; color: white; border-radius: 20px; padding: 0 20px; }
+    .stButton>button { background-color: #1a73e8; color: white; border-radius: 20px; padding: 0 20px; width: 100%; } /* Button full width in col */
     .error-box { padding: 1rem; background-color: #ffebee; border-radius: 8px; color: #c62828; }
+    /* Responsive adjustment handled by Streamlit default stacking */
 </style>
 """, unsafe_allow_html=True)
 
@@ -66,8 +67,11 @@ import io
 # --- Helper Callback ---
 def reset_state():
     """Reset conversion result when file changes."""
+    # Strict Reset: Clear result and metadata
     if "conversion_result" in st.session_state:
         st.session_state["conversion_result"] = None
+    if "result_meta" in st.session_state:
+        st.session_state["result_meta"] = None
 
 # --- Main App ---
 def main():
@@ -105,159 +109,235 @@ def main():
         """, unsafe_allow_html=True)
         return
 
-    # 4. Authenticated UI
-    st.write("### 📤 문서 이미지 업로드")
-    st.caption("지원 형식: **PNG, JPG, JPEG, WEBP** (최대 20MB)")
+    # 4. Authenticated UI - Split Layout
+    
+    # Create Columns
+    col1, col2 = st.columns([1, 1], gap="medium")
 
-    uploaded_file = st.file_uploader(
-        "Upload Document Image", 
-        type=['png', 'jpg', 'jpeg', 'webp'],
-        key="uploader",
-        on_change=reset_state
-    )
+    # --- LEFT COLUMN: Input & Action ---
+    with col1:
+        st.write("### 📤 문서 이미지 업로드")
+        st.caption("지원 형식: **PNG, JPG, JPEG, WEBP** (최대 20MB)")
 
-    if uploaded_file is not None:
-        # Validate Image Logic (Security)
-        image_bytes, mime_type, error = image_utils.validate_and_process_image(uploaded_file)
+        uploaded_file = st.file_uploader(
+            "Upload Document Image", 
+            type=['png', 'jpg', 'jpeg', 'webp'],
+            key="uploader",
+            on_change=reset_state # Callback ensures reset on new file
+        )
+
+        final_image_bytes = None
+        final_mime_type = "image/png"
         
-        if error:
-            st.error(f"❌ {error}")
-            return
+        current_file_id = None
+        current_crop_id = None # (left, top, width, height) or None
 
-        # Preview (Persistent)
-        # st.image(uploaded_file, caption=f"Uploaded Image ({mime_type})", use_container_width=True) # REMOVED: Replaced by Cropper UI Logic
+        if uploaded_file is not None:
+            # Generate Safe File ID
+            # Using basic properties + size for simple ID. Ideally sha256 but this is fast.
+            current_file_id = getattr(uploaded_file, "file_id", None) or f"{uploaded_file.name}_{uploaded_file.size}"
 
-        # --- 1. Load & Normalize Image (Cached) ---
-        try:
-            normalized_bytes = load_normalized_image_bytes(image_bytes)
-            # Create lightweight PIL object for UI from cached bytes
-            pil_image = Image.open(io.BytesIO(normalized_bytes))
-        except Exception as e:
-            st.error(f"Failed to process image: {e}")
-            return
-
-        # --- 2. Crop Mode Toggle ---
-        use_crop = st.toggle("✂️ 자르기 모드 (Crop Mode)", value=False, help="표 영역만 선택하여 변환 정확도를 높이세요.")
-        
-        cropped_img = None # Variable to hold the final PIL image to show/use
-
-        if use_crop:
-            st.info("💡 박스 모서리를 드래그하여 변환할 **표(Table)** 영역을 선택하세요.")
+            # Validate Image Logic (Security)
+            image_bytes, mime_type, error = image_utils.validate_and_process_image(uploaded_file)
             
-            # Safe File ID Generation
-            file_id = getattr(uploaded_file, "file_id", None) or f"{uploaded_file.name}_{uploaded_file.size}"
-            
-            # Render Cropper
-            cropped_img = st_cropper(
-                img_file=pil_image,
-                realtime_update=True,
-                box_color='#0000FF',
-                aspect_ratio=None,
-                key=f"cropper_{file_id}"
-            )
-            
-            # Note: cropped_img is a PIL Image returned by st_cropper
-        else:
-            # Standard View (Using Normalized Image for Consistency)
-            st.image(pil_image, caption=f"Original Image ({mime_type}) - EXIF Rotated", use_container_width=True)
-            cropped_img = pil_image # Use full image
-        
-        # Action Button
-        if st.button("Convert to Excel"):
-            # Reset previous result immediately before processing
-            reset_state()
-            
-            # --- 3. Finalize Image for API ---
-            final_image_bytes = None
-            final_mime_type = "image/png" # We always convert to PNG
+            if error:
+                st.error(f"❌ {error}")
+                return
 
+            # --- Load & Normalize Image (Cached) ---
+            try:
+                normalized_bytes = load_normalized_image_bytes(image_bytes)
+                pil_image = Image.open(io.BytesIO(normalized_bytes))
+            except Exception as e:
+                st.error(f"Failed to process image: {e}")
+                return
+
+            # --- Crop Mode Toggle ---
+            use_crop = st.toggle("✂️ 자르기 모드 (Crop Mode)", value=False, help="표 영역만 선택하여 변환 정확도를 높이세요.", on_change=reset_state)
+            
+            cropped_img = None
+            
+            if use_crop:
+                st.info("💡 박스 모서리를 드래그하여 변환할 **표(Table)** 영역을 선택하세요.")
+                
+                # Render Cropper
+                # Note: st_cropper doesn't expose on_change/box return easily without rerun.
+                # using st_cropper's return value to detect change implies rerun.
+                cropped_box = st_cropper(
+                    img_file=pil_image,
+                    realtime_update=True, # Performance vs UX trade-off
+                    box_color='#0000FF',
+                    aspect_ratio=None,
+                    key=f"cropper_{current_file_id}",
+                    return_type='box' # Get coordinates for ID generation
+                )
+                
+                # Re-crop manually to get image and consistent ID
+                # cropped_box response: {'left': int, 'top': int, 'width': int, 'height': int}
+                if cropped_box:
+                     current_crop_id = (cropped_box['left'], cropped_box['top'], cropped_box['width'], cropped_box['height'])
+                     cropped_img = pil_image.crop((
+                         cropped_box['left'], 
+                         cropped_box['top'], 
+                         cropped_box['left'] + cropped_box['width'], 
+                         cropped_box['top'] + cropped_box['height']
+                     ))
+                else:
+                    # Default full image if box is weird
+                    current_crop_id = None
+                    cropped_img = pil_image
+
+            else:
+                st.image(pil_image, caption=f"Original Image ({mime_type}) - EXIF Rotated", use_container_width=True)
+                current_crop_id = None # Full image
+                cropped_img = pil_image 
+            
+            # --- Prepare Final Bytes ---
             if use_crop and cropped_img:
-                # Convert the cropped PIL image to PNG bytes
                 output = io.BytesIO()
                 cropped_img.save(output, format='PNG')
                 final_image_bytes = output.getvalue()
             else:
-                # Use the normalized full image bytes
                 final_image_bytes = normalized_bytes
 
-            
-            with st.status("Processing...", expanded=True) as status:
-                st.write("🔍 Analyzing Layout with Gemini...")
+
+            # Action Button
+            if st.button("Convert to Excel"):
+                # Explicit Reset before start
+                reset_state()
                 
-                try:
-                    # Fetch from Cache or API
-                    api_key = st.session_state["api_key"]
-                    model_name = st.secrets.get("GEMINI_MODEL_NAME")
-                    if not model_name and "general" in st.secrets:
-                        model_name = st.secrets["general"].get("GEMINI_MODEL_NAME")
-                    if not model_name:
-                        model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3-flash")
+                with st.status("Processing...", expanded=True) as status:
+                    st.write("🔍 Analyzing Layout with Gemini...")
                     
-                    auth_user_type = st.session_state["auth_user_type"]
-                    
-                    # Determine Cache Seed (Security: Isolation)
-                    if auth_user_type == "master":
-                        cache_seed = "master_shared"
-                    else:
-                        # Guest: Generate HMAC based Seed using Server Secret
-                        secret = st.secrets.get("APP_PASSWORD") or st.secrets.get("general", {}).get("APP_PASSWORD") or "default_salt"
-                        cache_seed = hmac.new(secret.encode(), api_key.encode(), hashlib.sha256).hexdigest()
-
-                    layout_data = get_cached_analysis(
-                        image_bytes=final_image_bytes, # Use the finalized bytes
-                        mime_type=final_mime_type,     # Always image/png
-                        model_name=model_name,
-                        cache_seed=cache_seed,
-                        prompt_version="v1_crop", # Version bump for crop support
-                        _api_key=api_key
-                    )
-                    
-                    st.write("✅ Structure Extracted.")
-                    st.write("📊 Rendering Excel File...")
-                    
-                    excel_bytes = render_excel(layout_data)
-                    
-                    # Generate Preview DataFrame (Limit to top 100 rows for performance)
                     try:
-                        preview_df = pd.read_excel(io.BytesIO(excel_bytes), nrows=100)
-                    except Exception:
-                        preview_df = None # Fallback if pandas fails to read generated excel
-                    
-                    # Store result in Session State for Persistence
-                    st.session_state["conversion_result"] = {
-                        "excel_bytes": excel_bytes,
-                        "preview_df": preview_df
-                    }
-                    
-                    status.update(label="Conversion Complete!", state="complete", expanded=False)
-                    st.success("Your Excel file is ready! See preview below.")
-                    
-                except Exception as e:
-                    status.update(label="Error Occurred", state="error")
-                    st.error(f"Failed to convert. Please check your API usage or file content.\nDetails: {str(e)}")
+                        # Fetch from Cache or API
+                        api_key = st.session_state["api_key"]
+                        model_name = st.secrets.get("GEMINI_MODEL_NAME")
+                        if not model_name and "general" in st.secrets:
+                            model_name = st.secrets["general"].get("GEMINI_MODEL_NAME")
+                        if not model_name:
+                            model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3-flash")
+                        
+                        auth_user_type = st.session_state["auth_user_type"]
+                        
+                        # Determine Cache Seed (Security: Isolation)
+                        if auth_user_type == "master":
+                            cache_seed = "master_shared"
+                        else:
+                            # Guest: Generate HMAC based Seed using Server Secret
+                            secret = st.secrets.get("APP_PASSWORD") or st.secrets.get("general", {}).get("APP_PASSWORD") or "default_salt"
+                            cache_seed = hmac.new(secret.encode(), api_key.encode(), hashlib.sha256).hexdigest()
 
-        # Result Section (Persistent)
-        if st.session_state.get("conversion_result"):
-            st.divider()
-            st.write("### 📊 엑셀 미리보기")
+                        layout_data = get_cached_analysis(
+                            image_bytes=final_image_bytes, 
+                            mime_type=final_mime_type,     
+                            model_name=model_name,
+                            cache_seed=cache_seed,
+                            prompt_version="v1_crop", 
+                            _api_key=api_key
+                        )
+                        
+                        st.write("✅ Structure Extracted.")
+                        st.write("📊 Rendering Excel File...")
+                        
+                        excel_bytes = render_excel(layout_data)
+                        
+                        # Generate Preview DataFrame (Limit to top 100 rows for performance)
+                        try:
+                            preview_df = pd.read_excel(io.BytesIO(excel_bytes), nrows=100)
+                        except Exception:
+                            preview_df = None # Fallback if pandas fails to read generated excel
+                        
+                        # Store result in Session State for Persistence
+                        st.session_state["conversion_result"] = {
+                            "excel_bytes": excel_bytes,
+                            "preview_df": preview_df
+                        }
+                        # Store Meta for ID Matching
+                        st.session_state["result_meta"] = {
+                            "file_id": current_file_id,
+                            "crop_id": current_crop_id
+                        }
+                        
+                        status.update(label="Conversion Complete!", state="complete", expanded=False)
+                        st.success("Your Excel file is ready! Check the right panel.")
+                        
+                    except Exception as e:
+                        status.update(label="Error Occurred", state="error")
+                        st.error(f"Failed to convert. Please check your API usage or file content.\nDetails: {str(e)}")
+
+    # --- RIGHT COLUMN: Result & Preview ---
+    with col2:
+        st.write("### 📊 엑셀 변환 결과")
+        
+        # ID Matching Logic for Safe Rendering
+        result_data = st.session_state.get("conversion_result")
+        result_meta = st.session_state.get("result_meta")
+        
+        is_result_valid = False
+        if result_data and result_meta:
+            # Check if stored ID matches current input state
+            # Logic: If user changed upload or crop without clicking Convert, IDs won't match.
+            # However, if uploaded_file is None, we shouldn't show old result anyway?
+            # Plan said: "UX Consistency: Show result if session exists."
+            # Codex 3rd Review said: "Only show if IDs match current state."
             
-            result_data = st.session_state["conversion_result"]
+            # Case 1: Upload matches (or result exists and user is viewing same file)
+            # If uploaded_file is None (page refresh?), current_file_id is None.
+            # We relax check: If current_file_id is None, maybe hide? Or keep showing old result?
+            # Strict approach: Must match CURRENT input.
+            
+            if uploaded_file is None:
+                 # No input present. Hide result or show strict empty state?
+                 # Let's clean up state if file is gone defined by st.file_uploader logic
+                 is_result_valid = False
+            else:
+                 # Check IDs
+                 if result_meta.get("file_id") == current_file_id and result_meta.get("crop_id") == current_crop_id:
+                     is_result_valid = True
+                 else:
+                     is_result_valid = False
+
+        if is_result_valid:
+            st.info("✅ 변환이 완료되었습니다. 내용을 확인하고 다운로드하세요.")
+            
             preview_df = result_data.get("preview_df")
             excel_bytes = result_data.get("excel_bytes")
             
+            # Mobile Optimization: container width
             if preview_df is not None:
-                st.warning("⚠️ **미리보기는 상위 100행만 표시됩니다.** 전체 내용은 다운로드하여 확인하세요.")
+                st.caption("⚠️ **미리보기 (상위 100행)**")
                 st.dataframe(preview_df, use_container_width=True)
             else:
-                st.warning("⚠️ 미리보기를 불러올 수 없습니다. 다운로드하여 확인해주세요.")
+                st.warning("⚠️ 미리보기를 불러올 수 없습니다.")
             
             st.download_button(
-                label="📥 Download Excel File",
+                label="📥 엑셀 파일 다운로드 (Download .xlsx)",
                 data=excel_bytes,
                 file_name="Converted_Result.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="download_btn"
+                key="download_btn",
+                use_container_width=True # Wide button for touch targets
             )
+        else:
+            # Empty / Placeholder State
+            st.markdown("""
+            <div style='
+                text-align: center; 
+                padding: 40px 20px; 
+                border: 2px dashed #e0e0e0; 
+                border-radius: 10px; 
+                color: #757575;
+                margin-top: 20px;
+            '>
+                <div style='font-size: 40px; margin-bottom: 10px;'>👈</div>
+                <h4>변환할 이미지를 업로드하세요</h4>
+                <p>왼쪽 패널에서 이미지를 선택하고 <b>[Convert to Excel]</b> 버튼을 눌러주세요.</p>
+                <p style='font-size: 0.9em; margin-top: 10px;'>
+                    변환 결과와 미리보기가 이 영역에 표시됩니다.<br>
+                    모바일에서는 스크롤하여 하단에서 확인하실 수 있습니다.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
