@@ -1,8 +1,31 @@
 import streamlit as st
 import os
+import sys
+
+# Fix for ModuleNotFoundError: Ensure project root is in sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from src.core.analyzer_service import analyze_image
 from src.core.excel_service import render_excel
 from src.utils import auth_utils, image_utils
+from streamlit_cropper import st_cropper
+from PIL import Image, ImageOps
+import io
+
+# --- Caching for Image Normalization ---
+@st.cache_data(max_entries=50, ttl=3600) 
+def load_normalized_image_bytes(image_bytes: bytes) -> bytes:
+    """
+    입력 바이트를 받아 EXIF 회전 및 RGB 변환을 거친 정규화된 이미지의 바이트(PNG)를 반환합니다.
+    PIL 객체 자체를 캐싱하는 것보다 bytes 캐싱이 Pickling 이슈에서 안전합니다.
+    """
+    image = Image.open(io.BytesIO(image_bytes))
+    image = ImageOps.exif_transpose(image) # EXIF 회전 반영
+    image = image.convert("RGB") # 항상 RGB로 변환
+    
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
 
 # --- Configuration ---
 st.set_page_config(
@@ -49,7 +72,7 @@ def reset_state():
 # --- Main App ---
 def main():
     st.markdown("<h1 class='main-header'>Smart Layout OCR to Excel</h1>", unsafe_allow_html=True)
-    st.markdown("<p class='sub-header'>Gemini 3 Pro Powered Document Digitization</p>", unsafe_allow_html=True)
+    st.markdown("<p class='sub-header'>Gemini 3 Flash Powered Document Digitization</p>", unsafe_allow_html=True)
 
     # 1. Initialize Auth State
     auth_utils.init_auth_state()
@@ -102,12 +125,61 @@ def main():
             return
 
         # Preview (Persistent)
-        st.image(uploaded_file, caption=f"Uploaded Image ({mime_type})", use_container_width=True)
+        # st.image(uploaded_file, caption=f"Uploaded Image ({mime_type})", use_container_width=True) # REMOVED: Replaced by Cropper UI Logic
+
+        # --- 1. Load & Normalize Image (Cached) ---
+        try:
+            normalized_bytes = load_normalized_image_bytes(image_bytes)
+            # Create lightweight PIL object for UI from cached bytes
+            pil_image = Image.open(io.BytesIO(normalized_bytes))
+        except Exception as e:
+            st.error(f"Failed to process image: {e}")
+            return
+
+        # --- 2. Crop Mode Toggle ---
+        use_crop = st.toggle("✂️ 자르기 모드 (Crop Mode)", value=False, help="표 영역만 선택하여 변환 정확도를 높이세요.")
+        
+        cropped_img = None # Variable to hold the final PIL image to show/use
+
+        if use_crop:
+            st.info("💡 박스 모서리를 드래그하여 변환할 **표(Table)** 영역을 선택하세요.")
+            
+            # Safe File ID Generation
+            file_id = getattr(uploaded_file, "file_id", None) or f"{uploaded_file.name}_{uploaded_file.size}"
+            
+            # Render Cropper
+            cropped_img = st_cropper(
+                img_file=pil_image,
+                realtime_update=True,
+                box_color='#0000FF',
+                aspect_ratio=None,
+                key=f"cropper_{file_id}"
+            )
+            
+            # Note: cropped_img is a PIL Image returned by st_cropper
+        else:
+            # Standard View (Using Normalized Image for Consistency)
+            st.image(pil_image, caption=f"Original Image ({mime_type}) - EXIF Rotated", use_container_width=True)
+            cropped_img = pil_image # Use full image
         
         # Action Button
         if st.button("Convert to Excel"):
             # Reset previous result immediately before processing
             reset_state()
+            
+            # --- 3. Finalize Image for API ---
+            final_image_bytes = None
+            final_mime_type = "image/png" # We always convert to PNG
+
+            if use_crop and cropped_img:
+                # Convert the cropped PIL image to PNG bytes
+                output = io.BytesIO()
+                cropped_img.save(output, format='PNG')
+                final_image_bytes = output.getvalue()
+            else:
+                # Use the normalized full image bytes
+                final_image_bytes = normalized_bytes
+
             
             with st.status("Processing...", expanded=True) as status:
                 st.write("🔍 Analyzing Layout with Gemini...")
@@ -119,7 +191,7 @@ def main():
                     if not model_name and "general" in st.secrets:
                         model_name = st.secrets["general"].get("GEMINI_MODEL_NAME")
                     if not model_name:
-                        model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3-pro-preview")
+                        model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3-flash")
                     
                     auth_user_type = st.session_state["auth_user_type"]
                     
@@ -132,11 +204,11 @@ def main():
                         cache_seed = hmac.new(secret.encode(), api_key.encode(), hashlib.sha256).hexdigest()
 
                     layout_data = get_cached_analysis(
-                        image_bytes=image_bytes,
-                        mime_type=mime_type,
+                        image_bytes=final_image_bytes, # Use the finalized bytes
+                        mime_type=final_mime_type,     # Always image/png
                         model_name=model_name,
                         cache_seed=cache_seed,
-                        prompt_version="v1",
+                        prompt_version="v1_crop", # Version bump for crop support
                         _api_key=api_key
                     )
                     

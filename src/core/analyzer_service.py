@@ -43,7 +43,8 @@ def analyze_image(image_bytes: bytes, mime_type: str = "image/png", model_name: 
     # Structured output configuration
     generation_config = genai.GenerationConfig(
         response_mime_type="application/json",
-        response_schema=TableLayout
+        response_schema=TableLayout,
+        max_output_tokens=65536 # Increase token limit for large tables
     )
 
     try:
