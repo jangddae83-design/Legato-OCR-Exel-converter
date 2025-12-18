@@ -41,6 +41,40 @@ st.markdown("""
     .sub-header { font-family: 'Inter', sans-serif; color: #5f6368; text-align: center; margin-bottom: 2rem; }
     .stButton>button { background-color: #1a73e8; color: white; border-radius: 20px; padding: 0 20px; width: 100%; } /* Button full width in col */
     .error-box { padding: 1rem; background-color: #ffebee; border-radius: 8px; color: #c62828; }
+    
+    /* File Uploader Customization */
+    section[data-testid="stFileUploader"] {
+        /* Wrapper style if needed */
+    }
+    
+    /* Target the Dropzone Area to match result panel size */
+    section[data-testid="stFileUploader"] > div {
+        padding: 40px 20px; /* Match right panel padding */
+        min-height: 300px; /* Force visual height to match right panel */
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        background-color: white; /* Ensure background matches */
+        /* Border is handled by Streamlit internally, but we can override or enhance */
+    }
+
+    /* Hide default limit text */
+    section[data-testid="stFileUploader"] small {
+        visibility: hidden;
+        height: 0; /* Collapse original text space */
+    }
+
+    /* Inject custom text */
+    section[data-testid="stFileUploader"] small::before {
+        content: "지원 형식: PNG, JPG, JPEG, WEBP (최대 20MB)";
+        visibility: visible;
+        display: block;
+        height: auto;
+        color: #757575; /* Gray text to match design */
+        font-size: 14px;
+        margin-top: -15px; /* Pull it up if height:0 pushed it down, adjust visually */
+    }
+    
     /* Responsive adjustment handled by Streamlit default stacking */
 </style>
 """, unsafe_allow_html=True)
@@ -117,7 +151,7 @@ def main():
     # --- LEFT COLUMN: Input & Action ---
     with col1:
         st.write("### 📤 문서 이미지 업로드")
-        st.caption("지원 형식: **PNG, JPG, JPEG, WEBP** (최대 20MB)")
+        # st.caption("지원 형식: **PNG, JPG, JPEG, WEBP** (최대 20MB)") # REMOVED: Moved to CSS injection
 
         uploaded_file = st.file_uploader(
             "Upload Document Image", 
