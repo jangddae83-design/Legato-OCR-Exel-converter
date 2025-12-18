@@ -50,23 +50,45 @@ st.markdown("""
     /* Target the Dropzone Area to match result panel size (Approx 314px) */
     [data-testid="stFileUploaderDropzone"] {
         min-height: 314px; /* Matches right panel height */
-        /* display: flex; already flex */
-        /* flex-direction: column; already column */
-        /* justify-content: center; already center */
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center; 
     }
 
+    /* 1. Hide the file info list that appears below the upoader when a file is selected 
+       (Streamlit default behavior is to show a list of uploaded files below)
+       We want the image IN the dropzone (which streamlit does partially) but better integrated.
+       Actually, Streamlit shows:
+       [Dropzone]
+       [Uploaded File Item]
+       
+       We can't easily move the [Uploaded File Item] INTO the [Dropzone] via CSS alone.
+       However, we can render the image preview *instead* of showing the standard file list by:
+       - Hiding the standard uploaded file list.
+       - The user wants the image INSIDE the panel. Since Python code renders st.image *after* st.file_uploader,
+         it usually appears below. 
+       - To make it look "inside", we must render the image *immediately* after uploader and perhaps rely on visual trickery?
+       
+       Wait, user request: "업로드 패널 안에 이미지 파일이 들어가도록 해"
+       Streamlit's file_uploader widget *changes* when a file is uploaded. It usually shows the file name.
+       It does NOT show a full image preview inside the dropzone automatically.
+       
+       Strategy: 
+       We will HIDE the standard "Uploaded: filename.png" metadata.
+       This CSS hides the file list container.
+    */
+    [data-testid="stFileUploader"] ul {
+        display: none;
+    }
+
+    /* Remove the 'Limit 200MB' text logic from before, merging it with new requirements */
     /* Hide the second span which contains the 'Limit 200MB...' text */
     [data-testid="stFileUploaderDropzoneInstructions"] > div:nth-child(1) > span:nth-child(2) {
        visibility: hidden;
        height: 0;
        display: block;
     }
-    /* Fallback: target based on content (not possible in pure CSS easily without checking structure)
-       Usually standard Streamlit flow:
-       stFileUploaderDropzoneInstructions
-         > div > small (older) OR > div > span (newer)
-       Let's try a broader hit for the instructions text container if needed.
-    */
     
     /* Inject custom text */
     [data-testid="stFileUploaderDropzoneInstructions"] > div:nth-child(1) > span:nth-child(2)::before {
@@ -78,8 +100,6 @@ st.markdown("""
         font-size: 14px;
         margin-top: 10px; 
     }
-    
-    /* Note: "Drag and drop file here" is usually the first span. We leave it. */
     
     /* Responsive adjustment handled by Streamlit default stacking */
 </style>
@@ -159,32 +179,35 @@ def main():
         st.write("### 📤 문서 이미지 업로드")
         # st.caption("지원 형식: **PNG, JPG, JPEG, WEBP** (최대 20MB)") # REMOVED: Moved to CSS injection
 
+        # Logic: render uploader.
+        # If file is present, we still need the uploader widget to exist to maintain state.
+        # But we can try to make the image preview look integrated.
+        
         uploaded_file = st.file_uploader(
             "Upload Document Image", 
             type=['png', 'jpg', 'jpeg', 'webp'],
             key="uploader",
-            on_change=reset_state # Callback ensures reset on new file
+            on_change=reset_state 
         )
 
         final_image_bytes = None
         final_mime_type = "image/png"
         
         current_file_id = None
-        current_crop_id = None # (left, top, width, height) or None
+        current_crop_id = None 
 
         if uploaded_file is not None:
             # Generate Safe File ID
-            # Using basic properties + size for simple ID. Ideally sha256 but this is fast.
             current_file_id = getattr(uploaded_file, "file_id", None) or f"{uploaded_file.name}_{uploaded_file.size}"
 
-            # Validate Image Logic (Security)
+            # Validate
             image_bytes, mime_type, error = image_utils.validate_and_process_image(uploaded_file)
             
             if error:
                 st.error(f"❌ {error}")
                 return
 
-            # --- Load & Normalize Image (Cached) ---
+            # Load & Normalize
             try:
                 normalized_bytes = load_normalized_image_bytes(image_bytes)
                 pil_image = Image.open(io.BytesIO(normalized_bytes))
@@ -192,45 +215,57 @@ def main():
                 st.error(f"Failed to process image: {e}")
                 return
 
+            # --- Image Display Logic ---
+            # User wants "Image inside the upload panel".
+            # We can mimic this by rendering the image *immediately* after the uploader logic.
+            # Due to CSS hiding the `ul` (file list), the uploader "box" disappears visually upon selection?
+            # Actually, standard Streamlit behavior:
+            # - Before upload: Dropzone is visible.
+            # - After upload: Dropzone is replaced by "File uploaded" widget.
+            # If we hide the `ul` (File list), the widget might disappear entirely or look broken.
+            # Let's trust the previous CSS change `[data-testid="stFileUploader"] ul { display: none; }` 
+            # effectively hides the generic list.
+            # Now we render the Custom Image Preview right here.
+            
             # --- Crop Mode Toggle ---
             use_crop = st.toggle("✂️ 자르기 모드 (Crop Mode)", value=False, help="표 영역만 선택하여 변환 정확도를 높이세요.", on_change=reset_state)
             
             cropped_img = None
             
-            if use_crop:
-                st.info("💡 박스 모서리를 드래그하여 변환할 **표(Table)** 영역을 선택하세요.")
-                
-                # Render Cropper
-                # Note: st_cropper doesn't expose on_change/box return easily without rerun.
-                # using st_cropper's return value to detect change implies rerun.
-                cropped_box = st_cropper(
-                    img_file=pil_image,
-                    realtime_update=True, # Performance vs UX trade-off
-                    box_color='#0000FF',
-                    aspect_ratio=None,
-                    key=f"cropper_{current_file_id}",
-                    return_type='box' # Get coordinates for ID generation
-                )
-                
-                # Re-crop manually to get image and consistent ID
-                # cropped_box response: {'left': int, 'top': int, 'width': int, 'height': int}
-                if cropped_box:
-                     current_crop_id = (cropped_box['left'], cropped_box['top'], cropped_box['width'], cropped_box['height'])
-                     cropped_img = pil_image.crop((
-                         cropped_box['left'], 
-                         cropped_box['top'], 
-                         cropped_box['left'] + cropped_box['width'], 
-                         cropped_box['top'] + cropped_box['height']
-                     ))
+            # Preview Container
+            preview_container = st.container()
+            
+            # Apply a border/style to this container to make it look like the "panel"?
+            # Or just render the image.
+            
+            with preview_container:
+                if use_crop:
+                    st.info("💡 박스 모서리를 드래그하여 변환할 **표(Table)** 영역을 선택하세요.")
+                    cropped_box = st_cropper(
+                        img_file=pil_image,
+                        realtime_update=True,
+                        box_color='#0000FF',
+                        aspect_ratio=None,
+                        key=f"cropper_{current_file_id}",
+                        return_type='box'
+                    )
+                    if cropped_box:
+                         current_crop_id = (cropped_box['left'], cropped_box['top'], cropped_box['width'], cropped_box['height'])
+                         cropped_img = pil_image.crop((
+                             cropped_box['left'], 
+                             cropped_box['top'], 
+                             cropped_box['left'] + cropped_box['width'], 
+                             cropped_box['top'] + cropped_box['height']
+                         ))
+                    else:
+                        current_crop_id = None
+                        cropped_img = pil_image
                 else:
-                    # Default full image if box is weird
+                    # Full Image Preview
+                    # To look like "Inside Box", we might want to frame it.
+                    st.image(pil_image, use_container_width=True)
                     current_crop_id = None
-                    cropped_img = pil_image
-
-            else:
-                st.image(pil_image, caption=f"Original Image ({mime_type}) - EXIF Rotated", use_container_width=True)
-                current_crop_id = None # Full image
-                cropped_img = pil_image 
+                    cropped_img = pil_image 
             
             # --- Prepare Final Bytes ---
             if use_crop and cropped_img:
@@ -241,7 +276,13 @@ def main():
                 final_image_bytes = normalized_bytes
 
 
-            # Action Button
+            # Action Button Placement: "업로드 패널 왼쪽 아래"
+            # Since the layout is split:
+            # - Left Col: [Header] -> [Uploader (Hidden List)] -> [Image Preview (as if inside)] -> [Crop Toggle] -> [Button]
+            # This vertical stack naturally places the button at the bottom of the left column content.
+            
+            st.divider() # Visual separation
+            
             if st.button("Convert to Excel"):
                 # Explicit Reset before start
                 reset_state()
