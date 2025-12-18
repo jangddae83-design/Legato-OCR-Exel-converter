@@ -47,33 +47,39 @@ st.markdown("""
         /* Wrapper style if needed */
     }
     
-    /* Target the Dropzone Area to match result panel size */
-    section[data-testid="stFileUploader"] > div {
-        padding: 40px 20px; /* Match right panel padding */
-        min-height: 300px; /* Force visual height to match right panel */
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        background-color: white; /* Ensure background matches */
-        /* Border is handled by Streamlit internally, but we can override or enhance */
+    /* Target the Dropzone Area to match result panel size (Approx 314px) */
+    [data-testid="stFileUploaderDropzone"] {
+        min-height: 314px; /* Matches right panel height */
+        /* display: flex; already flex */
+        /* flex-direction: column; already column */
+        /* justify-content: center; already center */
     }
 
-    /* Hide default limit text */
-    section[data-testid="stFileUploader"] small {
-        visibility: hidden;
-        height: 0; /* Collapse original text space */
+    /* Hide the second span which contains the 'Limit 200MB...' text */
+    [data-testid="stFileUploaderDropzoneInstructions"] > div:nth-child(1) > span:nth-child(2) {
+       visibility: hidden;
+       height: 0;
+       display: block;
     }
-
+    /* Fallback: target based on content (not possible in pure CSS easily without checking structure)
+       Usually standard Streamlit flow:
+       stFileUploaderDropzoneInstructions
+         > div > small (older) OR > div > span (newer)
+       Let's try a broader hit for the instructions text container if needed.
+    */
+    
     /* Inject custom text */
-    section[data-testid="stFileUploader"] small::before {
+    [data-testid="stFileUploaderDropzoneInstructions"] > div:nth-child(1) > span:nth-child(2)::before {
         content: "지원 형식: PNG, JPG, JPEG, WEBP (최대 20MB)";
         visibility: visible;
         display: block;
         height: auto;
         color: #757575; /* Gray text to match design */
         font-size: 14px;
-        margin-top: -15px; /* Pull it up if height:0 pushed it down, adjust visually */
+        margin-top: 10px; 
     }
+    
+    /* Note: "Drag and drop file here" is usually the first span. We leave it. */
     
     /* Responsive adjustment handled by Streamlit default stacking */
 </style>
