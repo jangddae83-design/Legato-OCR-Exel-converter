@@ -372,8 +372,8 @@ def main():
                                 general_model = st.secrets.get("general", {}).get("GEMINI_MODEL_NAME")
                                 env_model = os.getenv("GEMINI_MODEL_NAME")
                                 
-                                # Priority: Secrets(Top) -> Secrets(General) -> Env -> Default "gemini-2.0-flash-exp"
-                                model_name = secret_model or general_model or env_model or "gemini-2.0-flash-exp"
+                                # Priority: Secrets(Top) -> Secrets(General) -> Env -> Default "gemini-3-flash-preview"
+                                model_name = secret_model or general_model or env_model or "gemini-3-flash-preview"
                                 
                                 # Log for debugging
                                 print(f"DEBUG: Selected Model Name: {model_name}")
@@ -381,8 +381,8 @@ def main():
 
                                 # Force Override if it's unintentionally picking up the expensive model
                                 if "pro" in model_name and "flash" not in model_name:
-                                    print(f"WARNING: 'pro' model detected ({model_name}). Fallback to 'gemini-2.0-flash-exp' for safety.")
-                                    model_name = "gemini-2.0-flash-exp"
+                                    print(f"WARNING: 'pro' model detected ({model_name}). Fallback to 'gemini-3-flash-preview' for safety.")
+                                    model_name = "gemini-3-flash-preview"
                                 
                                 auth_user_type = st.session_state["auth_user_type"]
                                 
