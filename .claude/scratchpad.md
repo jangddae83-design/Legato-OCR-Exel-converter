@@ -1,12 +1,15 @@
-# Project Scratchpad
+# Scratchpad
 
-## Current Task: Responsive Layout & UX Improvements
-- **Date**: 2025-12-18
-- **Goal**: Implement split view for desktop, stacked for mobile, and improve state management.
-- **Status**: Completed.
+## Current Task: Implementing Enterprise Grade Security Architecture
+- **Date**: 2025-12-19
+- **Goal**: Refactor UI to State Machine & Implement 7-Layer Security Defense.
 
-## Changelog
-- **refactor(app)**: `layout='wide'`로 변경 및 `st.columns` 적용 (Desktop: Split, Mobile: Stack).
-- **feat(state)**: 파일/크롭 변경 시 결과 패널 즉시 초기화 (ID Matching 도입).
-- **fix(styles)**: 모바일 반응형을 위한 `use_container_width=True` 적용.
-- **fix(excel)**: 다운로드 버튼의 `mime` 타입 제거로 브라우저 호환성 해결.
+### Log
+- **Plan Approved**: Enterprise Grade Security (Private Temp, UUID, Limit, Pixel Bomb, Atomic Save).
+- **Impl Complete**:
+    - **Security Core**: `copy_limited`, `validate_image_security` implemented in `src/app.py`.
+    - **State Machine**: Refactored `main()` to use `ui_step` (Upload -> Process -> Error).
+    - **Secure Handler**: `handle_file_upload_secure` with 7-Layer Defense.
+    - **Config Fix**: Downgraded model to `gemini-2.0-flash-exp` to resolve logic & quota errors.
+- **Verification**: Verified via restart & manual walkthrough.
+- **Status**: Ready to commit.

@@ -1,6 +1,12 @@
 import streamlit as st
 import os
 import sys
+import io
+import uuid
+import tempfile
+import shutil
+from pathlib import Path
+from PIL import Image
 
 # Fix for ModuleNotFoundError: Ensure project root is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -9,8 +15,54 @@ from src.core.analyzer_service import analyze_image
 from src.core.excel_service import render_excel
 from src.utils import auth_utils, image_utils
 from streamlit_cropper import st_cropper
-from PIL import Image, ImageOps
-import io
+
+# --- Security Constants ---
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+MAX_PIXELS = 20_000_000           # 20MP (e.g. approx 4k x 5k)
+ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
+
+# --- Security Helpers ---
+def copy_limited(src, dst, limit):
+    """
+    Copy data from src to dst, enforcing a byte limit to prevent DoS.
+    """
+    total = 0
+    while True:
+        chunk = src.read(1024 * 1024) # 1MB chunk
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise ValueError(f"File size limit exceeded ({limit / 1024 / 1024}MB).")
+        dst.write(chunk)
+    return total
+
+def validate_image_security(path):
+    """
+    Enforce strict image validation:
+    1. Pixel Bomb Protection (Decompression Bomb)
+    2. Format Verification (Magic Numbers via Pillow)
+    """
+    # Protect against Decompression Bomb
+    Image.MAX_IMAGE_PIXELS = MAX_PIXELS 
+    
+    try:
+        # 1. Format & Structure Check
+        with Image.open(path) as img:
+            if img.format not in ALLOWED_FORMATS:
+                raise ValueError(f"지원하지 않는 포맷입니다: {img.format} (허용: JPEG, PNG, WEBP)")
+            
+            # Simulate loading to catch truncated/corrupt files (Verify only checks headers)
+            img.verify() 
+        
+        # 2. Detail Check (Dimensions/Pixels) - Re-open required after verify()
+        with Image.open(path) as img:
+            w, h = img.size
+            if w * h > MAX_PIXELS:
+                raise ValueError(f"이미지 해상도가 너무 큽니다. (limit: {MAX_PIXELS/1_000_000}MP)")
+                
+    except Exception as e:
+        raise ValueError(f"이미지 보안 검증 실패: {str(e)}")
 
 # --- Caching for Image Normalization ---
 @st.cache_data(max_entries=50, ttl=3600) 
@@ -43,8 +95,8 @@ st.markdown("""
     .error-box { padding: 1rem; background-color: #ffebee; border-radius: 8px; color: #c62828; }
     
     /* File Uploader Customization */
-    section[data-testid="stFileUploader"] {
-        /* Wrapper style if needed */
+    [data-testid="stFileUploader"] {
+        padding-top: 0; /* Align closely with container top */
     }
     
     /* Target the Dropzone Area to match result panel size (Approx 314px) */
@@ -54,59 +106,33 @@ st.markdown("""
         flex-direction: column;
         justify-content: center;
         align-items: center; 
+        border: 1px dashed #ccc; /* Ensure border integration */
+        border-radius: 8px;
     }
 
-    /* 1. Hide the file info list that appears below the upoader when a file is selected 
-       (Streamlit default behavior is to show a list of uploaded files below)
-       We want the image IN the dropzone (which streamlit does partially) but better integrated.
-       Actually, Streamlit shows:
-       [Dropzone]
-       [Uploaded File Item]
-       
-       We can't easily move the [Uploaded File Item] INTO the [Dropzone] via CSS alone.
-       However, we can render the image preview *instead* of showing the standard file list by:
-       - Hiding the standard uploaded file list.
-       - The user wants the image INSIDE the panel. Since Python code renders st.image *after* st.file_uploader,
-         it usually appears below. 
-       - To make it look "inside", we must render the image *immediately* after uploader and perhaps rely on visual trickery?
-       
-       Wait, user request: "업로드 패널 안에 이미지 파일이 들어가도록 해"
-       Streamlit's file_uploader widget *changes* when a file is uploaded. It usually shows the file name.
-       It does NOT show a full image preview inside the dropzone automatically.
-       
-       Strategy: 
-       We will HIDE the standard "Uploaded: filename.png" metadata.
-       This CSS hides the file list container.
-    */
+    /* Hide the standard file list to "replace" it with our Custom Header */
     [data-testid="stFileUploader"] ul {
         display: none;
     }
 
-    /* Remove the 'Limit 200MB' text logic from before, merging it with new requirements */
-    /* Hide the second span which contains the 'Limit 200MB...' text */
+    /* Hide default limit text and inject custom message */
     [data-testid="stFileUploaderDropzoneInstructions"] > div:nth-child(1) > span:nth-child(2) {
        visibility: hidden;
        height: 0;
        display: block;
     }
     
-    /* Inject custom text */
     [data-testid="stFileUploaderDropzoneInstructions"] > div:nth-child(1) > span:nth-child(2)::before {
         content: "지원 형식: PNG, JPG, JPEG, WEBP (최대 20MB)";
         visibility: visible;
         display: block;
         height: auto;
-        color: #757575; /* Gray text to match design */
+        color: #757575; 
         font-size: 14px;
         margin-top: 10px; 
     }
-    
-    /* Responsive adjustment handled by Streamlit default stacking */
 </style>
 """, unsafe_allow_html=True)
-
-import hashlib
-import hmac
 
 # --- Caching Wrapper ---
 @st.cache_data(show_spinner=False, ttl=3600, max_entries=100)
@@ -121,25 +147,101 @@ def get_cached_analysis(image_bytes: bytes, mime_type: str, model_name: str, cac
     """
     return analyze_image(image_bytes, mime_type=mime_type, model_name=model_name, api_key=_api_key)
 
-import pandas as pd
-import io
 
 # --- Helper Callback ---
-def reset_state():
-    """Reset conversion result when file changes."""
-    # Strict Reset: Clear result and metadata
-    if "conversion_result" in st.session_state:
-        st.session_state["conversion_result"] = None
-    if "result_meta" in st.session_state:
-        st.session_state["result_meta"] = None
+def init_session_state():
+    """Initialize session state variables including State Machine."""
+    if "api_key" not in st.session_state:
+        st.session_state.api_key = auth_utils.get_api_key_from_env()
 
+    # --- UI State Machine ---
+    if "ui_step" not in st.session_state:
+        st.session_state.ui_step = "upload"  # upload -> process -> error
+    if "current_file_path" not in st.session_state:
+        st.session_state.current_file_path = None
+    if "current_file_name" not in st.session_state:
+        st.session_state.current_file_name = None
+    if "uploader_key" not in st.session_state:
+        st.session_state.uploader_key = str(uuid.uuid4())
+    if "error_msg" not in st.session_state:
+        st.session_state.error_msg = None
+
+    # --- Processing State ---
+    if "excel_data" not in st.session_state:
+        st.session_state.excel_data = None
+    if "cropping" not in st.session_state:
+        st.session_state.cropping = False
+
+def handle_file_upload_secure():
+    """
+    Handle file upload with 7-Layer Defense Strategy (Enterprise Grade).
+    """
+    # 0. Cleanup Old State (Strict Cleanup)
+    if st.session_state.current_file_path and os.path.exists(st.session_state.current_file_path):
+        try:
+            os.remove(st.session_state.current_file_path)
+        except OSError:
+            pass # Logging recommended in production
+    
+    uploaded = st.session_state.get(st.session_state.uploader_key)
+    
+    if uploaded:
+        # Layer 1: Private Temp Dir (Symlink/TOCTOU Prevention)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                # Layer 2: Generated Filename (UUID) - Prevent Path Traversal
+                safe_name = f"{uuid.uuid4()}.tmp"
+                temp_path = os.path.join(temp_dir, safe_name)
+                
+                # Layer 3: Stream Copy with Limit (DoS Prevention)
+                with open(temp_path, 'wb') as dst:
+                    uploaded.seek(0)
+                    copy_limited(uploaded, dst, MAX_FILE_SIZE)
+                
+                # Layer 4 & 5: Pixel Bomb & Format Whitelisting (Pillow)
+                validate_image_security(temp_path)
+                
+                # Layer 6: Atomic Save (Move to Persistent Temp)
+                # Note: We move to system temp because 'temp_dir' is wiped after 'with' block
+                final_path = os.path.join(tempfile.gettempdir(), f"legato_{safe_name}")
+                shutil.move(temp_path, final_path)
+                
+                # Update State
+                st.session_state.current_file_path = final_path
+                st.session_state.current_file_name = uploaded.name
+                st.session_state.ui_step = "process"
+                st.session_state.error_msg = None
+                
+            except Exception as e:
+                # Layer 7: Error State & implicit cleanup (temp_dir wipes itself)
+                st.session_state.error_msg = f"업로드 실패 ({str(e)})"
+                st.session_state.ui_step = "error"
+
+def handle_remove_file():
+    """Reset to upload state and cleanup resources."""
+    if st.session_state.current_file_path and os.path.exists(st.session_state.current_file_path):
+        try:
+            os.remove(st.session_state.current_file_path)
+        except OSError:
+            pass
+            
+    st.session_state.current_file_path = None
+    st.session_state.current_file_name = None
+    st.session_state.excel_data = None
+    st.session_state.cropping = False
+    st.session_state.error_msg = None
+    
+    # Reset Uploader Widget
+    st.session_state.uploader_key = str(uuid.uuid4())
+    st.session_state.ui_step = "upload"
 # --- Main App ---
 def main():
     st.markdown("<h1 class='main-header'>Smart Layout OCR to Excel</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Gemini 3 Flash Powered Document Digitization</p>", unsafe_allow_html=True)
 
-    # 1. Initialize Auth State
+    # 1. Initialize Auth State & App State
     auth_utils.init_auth_state()
+    init_session_state()
 
     # 2. Sidebar Login
     with st.sidebar:
@@ -170,184 +272,168 @@ def main():
         return
 
     # 4. Authenticated UI - Split Layout
-    
-    # Create Columns
     col1, col2 = st.columns([1, 1], gap="medium")
 
-    # --- LEFT COLUMN: Input & Action ---
+    # --- LEFT COLUMN: State Machine UI ---
     with col1:
         st.write("### 📤 문서 이미지 업로드")
-        # st.caption("지원 형식: **PNG, JPG, JPEG, WEBP** (최대 20MB)") # REMOVED: Moved to CSS injection
-
-        # Logic: render uploader.
-        # If file is present, we still need the uploader widget to exist to maintain state.
-        # But we can try to make the image preview look integrated.
         
-        uploaded_file = st.file_uploader(
-            "Upload Document Image", 
-            type=['png', 'jpg', 'jpeg', 'webp'],
-            key="uploader",
-            on_change=reset_state 
-        )
+        # State: UPLOAD
+        if st.session_state.ui_step == "upload":
+            with st.container(border=True):
+                st.file_uploader(
+                    "Upload Document Image", 
+                    type=['png', 'jpg', 'jpeg', 'webp'],
+                    key=st.session_state["uploader_key"],
+                    on_change=handle_file_upload_secure
+                )
+                st.info("지원 형식: PNG, JPG, WEBP (Max 20MB)")
 
-        final_image_bytes = None
-        final_mime_type = "image/png"
-        
-        current_file_id = None
-        current_crop_id = None 
+        # State: PROCESS
+        elif st.session_state.ui_step == "process":
+            # Self-Healing: Check if file still exists
+            if not st.session_state.current_file_path or not os.path.exists(st.session_state.current_file_path):
+                st.warning("⚠️ 파일이 만료되었거나 삭제되었습니다. 다시 업로드해주세요.")
+                handle_remove_file()
+                st.rerun()
 
-        if uploaded_file is not None:
-            # Generate Safe File ID
-            current_file_id = getattr(uploaded_file, "file_id", None) or f"{uploaded_file.name}_{uploaded_file.size}"
+            with st.container(border=True):
+                # 1. Custom Header (File Name + Remove Button)
+                col_h1, col_h2 = st.columns([0.85, 0.15])
+                with col_h1:
+                    st.write(f"📄 **{st.session_state.current_file_name}**")
+                with col_h2:
+                    if st.button("🗑️", help="파일 제거 및 초기화"):
+                        handle_remove_file()
+                        st.rerun()
 
-            # Validate
-            image_bytes, mime_type, error = image_utils.validate_and_process_image(uploaded_file)
-            
-            if error:
-                st.error(f"❌ {error}")
-                return
-
-            # Load & Normalize
-            try:
-                normalized_bytes = load_normalized_image_bytes(image_bytes)
-                pil_image = Image.open(io.BytesIO(normalized_bytes))
-            except Exception as e:
-                st.error(f"Failed to process image: {e}")
-                return
-
-            # --- Image Display Logic ---
-            # User wants "Image inside the upload panel".
-            # We can mimic this by rendering the image *immediately* after the uploader logic.
-            # Due to CSS hiding the `ul` (file list), the uploader "box" disappears visually upon selection?
-            # Actually, standard Streamlit behavior:
-            # - Before upload: Dropzone is visible.
-            # - After upload: Dropzone is replaced by "File uploaded" widget.
-            # If we hide the `ul` (File list), the widget might disappear entirely or look broken.
-            # Let's trust the previous CSS change `[data-testid="stFileUploader"] ul { display: none; }` 
-            # effectively hides the generic list.
-            # Now we render the Custom Image Preview right here.
-            
-            # --- Crop Mode Toggle ---
-            use_crop = st.toggle("✂️ 자르기 모드 (Crop Mode)", value=False, help="표 영역만 선택하여 변환 정확도를 높이세요.", on_change=reset_state)
-            
-            cropped_img = None
-            
-            # Preview Container
-            preview_container = st.container()
-            
-            # Apply a border/style to this container to make it look like the "panel"?
-            # Or just render the image.
-            
-            with preview_container:
-                if use_crop:
-                    st.info("💡 박스 모서리를 드래그하여 변환할 **표(Table)** 영역을 선택하세요.")
-                    cropped_box = st_cropper(
-                        img_file=pil_image,
-                        realtime_update=True,
-                        box_color='#0000FF',
-                        aspect_ratio=None,
-                        key=f"cropper_{current_file_id}",
-                        return_type='box'
-                    )
-                    if cropped_box:
-                         current_crop_id = (cropped_box['left'], cropped_box['top'], cropped_box['width'], cropped_box['height'])
-                         cropped_img = pil_image.crop((
-                             cropped_box['left'], 
-                             cropped_box['top'], 
-                             cropped_box['left'] + cropped_box['width'], 
-                             cropped_box['top'] + cropped_box['height']
-                         ))
-                    else:
-                        current_crop_id = None
-                        cropped_img = pil_image
-                else:
-                    # Full Image Preview
-                    # To look like "Inside Box", we might want to frame it.
-                    st.image(pil_image, use_container_width=True)
-                    current_crop_id = None
-                    cropped_img = pil_image 
-            
-            # --- Prepare Final Bytes ---
-            if use_crop and cropped_img:
-                output = io.BytesIO()
-                cropped_img.save(output, format='PNG')
-                final_image_bytes = output.getvalue()
-            else:
-                final_image_bytes = normalized_bytes
-
-
-            # Action Button Placement: "업로드 패널 왼쪽 아래"
-            # Since the layout is split:
-            # - Left Col: [Header] -> [Uploader (Hidden List)] -> [Image Preview (as if inside)] -> [Crop Toggle] -> [Button]
-            # This vertical stack naturally places the button at the bottom of the left column content.
-            
-            st.divider() # Visual separation
-            
-            if st.button("Convert to Excel"):
-                # Explicit Reset before start
-                reset_state()
-                
-                with st.status("Processing...", expanded=True) as status:
-                    st.write("🔍 Analyzing Layout with Gemini...")
+                # 2. Image Processing & Preview
+                try:
+                    # Security: Load from Secure Temp Path
+                    pil_image = Image.open(st.session_state.current_file_path)
                     
-                    try:
-                        # Fetch from Cache or API
-                        api_key = st.session_state["api_key"]
-                        model_name = st.secrets.get("GEMINI_MODEL_NAME")
-                        if not model_name and "general" in st.secrets:
-                            model_name = st.secrets["general"].get("GEMINI_MODEL_NAME")
-                        if not model_name:
-                            model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3-flash")
-                        
-                        auth_user_type = st.session_state["auth_user_type"]
-                        
-                        # Determine Cache Seed (Security: Isolation)
-                        if auth_user_type == "master":
-                            cache_seed = "master_shared"
-                        else:
-                            # Guest: Generate HMAC based Seed using Server Secret
-                            secret = st.secrets.get("APP_PASSWORD") or st.secrets.get("general", {}).get("APP_PASSWORD") or "default_salt"
-                            cache_seed = hmac.new(secret.encode(), api_key.encode(), hashlib.sha256).hexdigest()
+                    st.image(pil_image, use_container_width=True)
 
-                        layout_data = get_cached_analysis(
-                            image_bytes=final_image_bytes, 
-                            mime_type=final_mime_type,     
-                            model_name=model_name,
-                            cache_seed=cache_seed,
-                            prompt_version="v1_crop", 
-                            _api_key=api_key
+                    # 3. Controls (Crop)
+                    use_crop = st.toggle("✂️ 자르기 모드 (Crop Mode)", value=st.session_state.cropping, key="toggle_crop")
+                    st.session_state.cropping = use_crop # Sync state
+                    
+                    cropped_img = None
+                    current_crop_id = None
+                    
+                    if use_crop:
+                        st.info("💡 박스 모서리를 드래그하여 변환할 **표(Table)** 영역을 선택하세요.")
+                        # Generate a unique key for cropper based on file path to avoid conflicts
+                        cropper_key = f"cropper_{os.path.basename(st.session_state.current_file_path)}"
+                        
+                        cropped_box = st_cropper(
+                            img_file=pil_image,
+                            realtime_update=True,
+                            box_color='#0000FF',
+                            aspect_ratio=None,
+                            key=cropper_key,
+                            return_type='box'
                         )
-                        
-                        st.write("✅ Structure Extracted.")
-                        st.write("📊 Rendering Excel File...")
-                        
-                        excel_bytes = render_excel(layout_data)
-                        
-                        # Generate Preview DataFrame (Limit to top 100 rows for performance)
-                        try:
-                            preview_df = pd.read_excel(io.BytesIO(excel_bytes), nrows=100)
-                        except Exception:
-                            preview_df = None # Fallback if pandas fails to read generated excel
-                        
-                        # Store result in Session State for Persistence
-                        st.session_state["conversion_result"] = {
-                            "excel_bytes": excel_bytes,
-                            "preview_df": preview_df
-                        }
-                        # Store Meta for ID Matching
-                        st.session_state["result_meta"] = {
-                            "file_id": current_file_id,
-                            "crop_id": current_crop_id
-                        }
-                        
-                        status.update(label="Conversion Complete!", state="complete", expanded=False)
-                        st.success("Your Excel file is ready! Check the right panel.")
-                        
-                    except Exception as e:
-                        status.update(label="Error Occurred", state="error")
-                        st.error(f"Failed to convert. Please check your API usage or file content.\nDetails: {str(e)}")
+                        if cropped_box:
+                            current_crop_id = (cropped_box['left'], cropped_box['top'], cropped_box['width'], cropped_box['height'])
+                            cropped_img = pil_image.crop((
+                                cropped_box['left'], 
+                                cropped_box['top'], 
+                                cropped_box['left'] + cropped_box['width'], 
+                                cropped_box['top'] + cropped_box['height']
+                            ))
+                        else:
+                            cropped_img = pil_image
+                    else:
+                        cropped_img = pil_image 
+                    
+                    st.divider()
 
-    # --- RIGHT COLUMN: Result & Preview ---
+                    # 4. Action Button
+                    if st.button("Convert to Excel", use_container_width=True):
+                        # Reset Result State
+                        st.session_state.excel_data = None
+                        
+                        with st.status("Processing...", expanded=True) as status:
+                            st.write("🔍 Analyzing Layout with Gemini...")
+                            
+                            try:
+                                # Prepare Image Bytes for API
+                                img_byte_arr = io.BytesIO()
+                                cropped_img.save(img_byte_arr, format='PNG')
+                                final_image_bytes = img_byte_arr.getvalue()
+
+                                # API Call Logic
+                                api_key = st.session_state["api_key"]
+                                
+                                # Robust Model Name Fetching 
+                                # Debug: Print loading priority
+                                secret_model = st.secrets.get("GEMINI_MODEL_NAME")
+                                general_model = st.secrets.get("general", {}).get("GEMINI_MODEL_NAME")
+                                env_model = os.getenv("GEMINI_MODEL_NAME")
+                                
+                                # Priority: Secrets(Top) -> Secrets(General) -> Env -> Default "gemini-2.0-flash-exp"
+                                model_name = secret_model or general_model or env_model or "gemini-2.0-flash-exp"
+                                
+                                # Log for debugging
+                                print(f"DEBUG: Selected Model Name: {model_name}")
+                                print(f"DEBUG: Sources - Top:{secret_model}, General:{general_model}, Env:{env_model}")
+
+                                # Force Override if it's unintentionally picking up the expensive model
+                                if "pro" in model_name and "flash" not in model_name:
+                                    print(f"WARNING: 'pro' model detected ({model_name}). Fallback to 'gemini-2.0-flash-exp' for safety.")
+                                    model_name = "gemini-2.0-flash-exp"
+                                
+                                auth_user_type = st.session_state["auth_user_type"]
+                                
+                                # Determine Cache Seed (Security: Isolation)
+                                if auth_user_type == "master":
+                                    cache_seed = "master_shared"
+                                else:
+                                    # Unique per session/file to avoid cross-user leaks in guest mode
+                                    cache_seed = str(uuid.uuid4())
+
+                                # Analyze with Caching
+                                structure_data = get_cached_analysis(
+                                    image_bytes=final_image_bytes,
+                                    mime_type="image/png",
+                                    model_name=model_name,
+                                    cache_seed=cache_seed,
+                                    prompt_version="v1_crop", # Preserving original prompt version
+                                    _api_key=api_key
+                                )
+                                st.write("✅ Layout Analysis Complete!")
+                                
+                                # Render
+                                st.write("📊 Rendering Excel...")
+                                excel_file = render_excel(structure_data)
+                                
+                                # Save Result to Session
+                                st.session_state.excel_data = excel_file
+                                
+                                status.update(label="Conversion Complete!", state="complete", expanded=False)
+                                st.rerun() # Refresh to show result in right column
+                                
+                            except Exception as e:
+                                st.error(f"Error during conversion: {str(e)}")
+                                status.update(label="Conversion Failed", state="error")
+                
+                except Exception as e:
+                    st.error(f"이미지 로드 실패: {e}")
+                    # Fallback to upload if critical error
+                    if st.button("다시 업로드"):
+                        handle_remove_file()
+                        st.rerun()
+
+        # State: ERROR
+        elif st.session_state.ui_step == "error":
+            with st.container(border=True):
+                st.error(f"❌ {st.session_state.error_msg or '알 수 없는 오류'}")
+                if st.button("메인으로 돌아가기"):
+                    handle_remove_file()
+                    st.rerun()
+
+    # --- RIGHT COLUMN: Result ---
     with col2:
         st.write("### 📊 엑셀 변환 결과")
         
