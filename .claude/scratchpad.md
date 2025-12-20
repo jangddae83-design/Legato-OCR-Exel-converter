@@ -31,3 +31,6 @@
 - **Feat**: Added support for iPhone Live Photos (MPO format).
     - **Whitelist**: Added `MPO` to `ALLOWED_FORMATS`.
     - **UX**: Improved error message to guide HEIC users to convert to JPG.
+- **Fix**: Resolved `MergedCell` Read-Only Error during Excel conversion.
+    - **Logic**: Implemented "Sort & Occupancy Check" strategy in `excel_service.py` to prevent overlapping merges from AI hallucinations.
+    - **Stability**: Added MergedCell type check in column width adjustment to prevent runtime crashes.

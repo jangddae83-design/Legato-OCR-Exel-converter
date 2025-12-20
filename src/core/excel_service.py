@@ -2,6 +2,7 @@ from io import BytesIO
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Border, Side, Alignment
+from openpyxl.cell.cell import MergedCell
 from src.core.models import TableLayout, ConversionResult
 
 def sanitize_for_excel(text: str) -> str:
@@ -39,18 +40,26 @@ def render_excel(layout: TableLayout) -> ConversionResult:
     max_preview_row = 0
     max_preview_col = 0
     
-    for cell in layout.cells:
-        # Sanitization for Security
-        safe_text = sanitize_for_excel(cell.text)
-        
-        # 1-based indexing for openpyxl
+    # Sort cells by row then col (Critical for correct merging order)
+    sorted_cells = sorted(layout.cells, key=lambda x: (x.row_index, x.col_index))
+    
+    occupied = set()
+    
+    for cell in sorted_cells:
+        # 0-based to 1-based logic
         r = cell.row_index + 1
         c = cell.col_index + 1
         
-        # Write text to Excel
+        # 1. Skip if already occupied (prevent MergedCell read-only error)
+        if (r, c) in occupied:
+            continue
+
+        safe_text = sanitize_for_excel(cell.text)
+        
+        # Write Value
         curr_cell = ws.cell(row=r, column=c, value=safe_text)
         
-        # Apply style to Excel
+        # Apply style
         curr_cell.border = thin_border
         curr_cell.alignment = center_align
         
@@ -64,7 +73,28 @@ def render_excel(layout: TableLayout) -> ConversionResult:
         if cell.row_span > 1 or cell.col_span > 1:
             end_r = r + cell.row_span - 1
             end_c = c + cell.col_span - 1
-            ws.merge_cells(start_row=r, start_column=c, end_row=end_r, end_column=end_c)
+            
+            # Check for overlapping merges (Safe Merge)
+            is_safe_merge = True
+            for ir in range(r, end_r + 1):
+                for ic in range(c, end_c + 1):
+                    # Check if any cell in target range (except start) is already occupied
+                    if (ir, ic) in occupied and (ir, ic) != (r, c):
+                        is_safe_merge = False
+                        break
+                if not is_safe_merge: break
+            
+            if is_safe_merge:
+                ws.merge_cells(start_row=r, start_column=c, end_row=end_r, end_column=end_c)
+                # Mark as occupied
+                for ir in range(r, end_r + 1):
+                    for ic in range(c, end_c + 1):
+                        occupied.add((ir, ic))
+            else:
+                # Merge Conflict: Fallback to single cell
+                occupied.add((r, c))
+        else:
+            occupied.add((r, c))
     
     from openpyxl.utils import get_column_letter
     
@@ -73,6 +103,10 @@ def render_excel(layout: TableLayout) -> ConversionResult:
         max_length = 0
         column = get_column_letter(col[0].column)
         for cell in col:
+            # MergedCell safe guard
+            if isinstance(cell, MergedCell):
+                continue
+                
             try:
                 if len(str(cell.value)) > max_length:
                     max_length = len(str(cell.value))
