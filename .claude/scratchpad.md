@@ -24,3 +24,7 @@
     - **Docs**: Updated `DEPLOYMENT.md` with correct Secrets configuration for the new model.
     - **UI**: Updated app header to reflect the new model name.
 - **Status**: Committing model updates.
+- **Fix**: Resolved Gemini API Schema & Validation Errors.
+    - **Schema Fix**: Eliminated `Unknown field for Schema: default` by making `CellData` fields required in `models.py`.
+    - **Robustness**: Implemented `mode='before'` validator to safely handle `null` or missing values from AI, preventing `Validation Error` crashes.
+    - **Prompt**: Refined prompt in `analyzer_service.py` to strictly forbid nulls and require explicit integers.

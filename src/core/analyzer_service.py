@@ -4,6 +4,7 @@ import google.generativeai as genai
 from typing import Optional
 from src.core.models import TableLayout, CellData
 import typing_extensions as typing
+from pydantic import ValidationError
 import threading
 
 # Global Lock for API Safety
@@ -29,7 +30,11 @@ For each cell:
 - Identify row_span and col_span. You MUST provide these values for every cell (use 1 for single cells).
 - If a cell is merged, only output it once with the correct span.
 
-Ensure all visible text is captured.
+CRITICAL INSTRUCTIONS:
+- Do NOT return `null` for any field.
+- Use an empty string `""` for cells with no text.
+- Always provide integer values for `row_span` and `col_span`. Default to 1 if unsure.
+- Ensure all visible text is captured.
 """
 
 def analyze_image(image_bytes: bytes, mime_type: str = "image/png", model_name: str = "gemini-2.5-flash-lite", api_key: Optional[str] = None) -> TableLayout:
@@ -72,7 +77,13 @@ def analyze_image(image_bytes: bytes, mime_type: str = "image/png", model_name: 
         
         json_text = response.text
         # Parse JSON to Pydantic
+        # Parse JSON to Pydantic
         return TableLayout.model_validate_json(json_text)
+
+    except ValidationError as e:
+        print(f"Validation Error: {e}")
+        # Raise a user-friendly error that streamlit can display nicely
+        raise ValueError(f"AI 모델이 올바르지 않은 형식을 반환했습니다. (Validation Error)")
         
     except Exception as e:
         print(f"Error calling Gemini API: {e}")
