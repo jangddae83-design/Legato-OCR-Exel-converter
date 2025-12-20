@@ -14,4 +14,5 @@
 - **Verification**: Verified via restart & manual walkthrough.
 - **Update**: Upgraded model to `gemini-3-flash-preview` per user request.
 - **Update**: Upgraded model to `gemini-3-flash` (Stable) for better performance and cost efficiency.
-- **Status**: Committing changes.
+- **Rollback**: Switching back to `gemini-1.5-flash` due to restrictive free tier rate limits (5 RPM) on Gemini 3.
+- **Status**: Committing rollback changes.
