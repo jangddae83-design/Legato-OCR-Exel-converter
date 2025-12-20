@@ -238,7 +238,7 @@ def handle_remove_file():
 # --- Main App ---
 def main():
     st.markdown("<h1 class='main-header'>Smart Layout OCR to Excel</h1>", unsafe_allow_html=True)
-    st.markdown("<p class='sub-header'>Gemini 1.5 Flash Powered Document Digitization</p>", unsafe_allow_html=True)
+    st.markdown("<p class='sub-header'>Gemini 2.5 Flash Lite Powered Document Digitization</p>", unsafe_allow_html=True)
 
     # 1. Initialize Auth State & App State
     auth_utils.init_auth_state()
@@ -374,15 +374,15 @@ def main():
                                 env_model = os.getenv("GEMINI_MODEL_NAME")
                                 
                                 # Priority: Secrets(Top) -> Secrets(General) -> Env -> Default "gemini-1.5-flash"
-                                model_name = secret_model or general_model or env_model or "gemini-1.5-flash"
+                                model_name = secret_model or general_model or env_model or "gemini-2.5-flash-lite"
                                 
                                 # Print debug
                                 print(f"DEBUG: Selected Model Name: {model_name}")
 
                                 # Force Override if it's unintentionally picking up the expensive model
                                 if "pro" in model_name and "flash" not in model_name:
-                                    print(f"WARNING: 'pro' model detected ({model_name}). Fallback to 'gemini-1.5-flash' for safety.")
-                                    model_name = "gemini-1.5-flash"
+                                    print(f"WARNING: 'pro' model detected ({model_name}). Fallback to 'gemini-2.5-flash-lite' for safety.")
+                                    model_name = "gemini-2.5-flash-lite"
                                 
                                 auth_user_type = st.session_state["auth_user_type"]
                                 

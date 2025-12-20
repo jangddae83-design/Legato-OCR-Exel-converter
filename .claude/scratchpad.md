@@ -20,4 +20,7 @@
     - **Security**: Added Excel Formula Injection sanitization.
     - **Performance**: Optimized preview generation (Top 50 rows limit).
     - **UX**: Fixed atomic session state updates to ensure UI consistency.
-- **Status**: Committing fixes.
+- **Update**: Switched to `gemini-2.5-flash-lite` to optimize Free Tier limits (30 RPM, 1500 RPD).
+    - **Docs**: Updated `DEPLOYMENT.md` with correct Secrets configuration for the new model.
+    - **UI**: Updated app header to reflect the new model name.
+- **Status**: Committing model updates.

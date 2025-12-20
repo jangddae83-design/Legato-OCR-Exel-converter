@@ -27,8 +27,11 @@
 3. 아래 내용을 복사하여 붙여넣고 **Save**를 누릅니다.
     ```toml
     GEMINI_API_KEY = "여기에_당신의_API_키를_입력하세요"
-    GEMINI_MODEL_NAME = "gemini-3-pro-preview"
+    GEMINI_MODEL_NAME = "gemini-2.5-flash-lite"
+    APP_PASSWORD = "원하는_관리자_비밀번호_설정"
     ```
+    > **Tip:** `APP_PASSWORD`를 설정하면 매번 API 키를 입력할 필요 없이 비밀번호 하나로 로그인하여 앱에 저장된 API 키를 사용할 수 있습니다.
+
 4. 앱을 **Reboot** 하거나 화면을 새로고침하면 정상 작동합니다.
 
 ### 4단계: 공유하기

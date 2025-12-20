@@ -32,7 +32,7 @@ For each cell:
 Ensure all visible text is captured.
 """
 
-def analyze_image(image_bytes: bytes, mime_type: str = "image/png", model_name: str = "gemini-1.5-flash", api_key: Optional[str] = None) -> TableLayout:
+def analyze_image(image_bytes: bytes, mime_type: str = "image/png", model_name: str = "gemini-2.5-flash-lite", api_key: Optional[str] = None) -> TableLayout:
     """
     Analyzes the image using Gemini 1.5 Flash and returns the structural layout.
     """
