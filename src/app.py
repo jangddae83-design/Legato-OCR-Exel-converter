@@ -20,7 +20,7 @@ from streamlit_cropper import st_cropper
 # --- Security Constants ---
 MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
 MAX_PIXELS = 20_000_000           # 20MP (e.g. approx 4k x 5k)
-ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
+ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "MPO"}
 
 # --- Security Helpers ---
 def copy_limited(src, dst, limit):
@@ -51,7 +51,7 @@ def validate_image_security(path):
         # 1. Format & Structure Check
         with Image.open(path) as img:
             if img.format not in ALLOWED_FORMATS:
-                raise ValueError(f"지원하지 않는 포맷입니다: {img.format} (허용: JPEG, PNG, WEBP)")
+                raise ValueError(f"지원하지 않는 포맷입니다: {img.format}\n(허용: JPEG, PNG, WEBP, MPO)\n💡 아이폰 HEIC 사진은 JPG로 설정하여 다시 찍거나 변환해주세요.")
             
             # Simulate loading to catch truncated/corrupt files (Verify only checks headers)
             img.verify() 

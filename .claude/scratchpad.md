@@ -28,3 +28,6 @@
     - **Schema Fix**: Eliminated `Unknown field for Schema: default` by making `CellData` fields required in `models.py`.
     - **Robustness**: Implemented `mode='before'` validator to safely handle `null` or missing values from AI, preventing `Validation Error` crashes.
     - **Prompt**: Refined prompt in `analyzer_service.py` to strictly forbid nulls and require explicit integers.
+- **Feat**: Added support for iPhone Live Photos (MPO format).
+    - **Whitelist**: Added `MPO` to `ALLOWED_FORMATS`.
+    - **UX**: Improved error message to guide HEIC users to convert to JPG.
