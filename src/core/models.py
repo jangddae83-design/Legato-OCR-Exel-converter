@@ -1,5 +1,17 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
+from dataclasses import dataclass
+import pandas as pd
+
+@dataclass
+class ConversionResult:
+    """
+    Result object containing the generated Excel file and a preview.
+    Using a dataclass ensures strict typing and consistent access.
+    """
+    excel_bytes: bytes
+    preview_df: pd.DataFrame
+    row_count: int
 
 class CellData(BaseModel):
     """
@@ -10,7 +22,6 @@ class CellData(BaseModel):
     col_index: int = Field(..., description="0-based column index")
     row_span: int = Field(..., description="Number of rows this cell spans (must be at least 1)")
     col_span: int = Field(..., description="Number of columns this cell spans (must be at least 1)")
-    # style_hints temporarily removed to prevent schema default value errors
 
 class TableLayout(BaseModel):
     """

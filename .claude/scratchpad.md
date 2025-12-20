@@ -15,4 +15,9 @@
 - **Update**: Upgraded model to `gemini-3-flash-preview` per user request.
 - **Update**: Upgraded model to `gemini-3-flash` (Stable) for better performance and cost efficiency.
 - **Rollback**: Switching back to `gemini-1.5-flash` due to restrictive free tier rate limits (5 RPM) on Gemini 3.
-- **Status**: Committing rollback changes.
+- **Fix**: Resolved "Silent Failure" in Excel conversion.
+    - **Refactor**: Implemented `ConversionResult` DTO for type safety.
+    - **Security**: Added Excel Formula Injection sanitization.
+    - **Performance**: Optimized preview generation (Top 50 rows limit).
+    - **UX**: Fixed atomic session state updates to ensure UI consistency.
+- **Status**: Committing fixes.

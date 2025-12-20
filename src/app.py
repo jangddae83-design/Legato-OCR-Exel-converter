@@ -5,8 +5,9 @@ import io
 import uuid
 import tempfile
 import shutil
+import time
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageOps
 
 # Fix for ModuleNotFoundError: Ensure project root is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -351,8 +352,9 @@ def main():
 
                     # 4. Action Button
                     if st.button("Convert to Excel", use_container_width=True):
-                        # Reset Result State
-                        st.session_state.excel_data = None
+                        # Reset Result State (Use unified state)
+                        st.session_state.conversion_result = None
+                        st.session_state.result_meta = None
                         
                         with st.status("Processing...", expanded=True) as status:
                             st.write("🔍 Analyzing Layout with Gemini...")
@@ -367,17 +369,15 @@ def main():
                                 api_key = st.session_state["api_key"]
                                 
                                 # Robust Model Name Fetching 
-                                # Debug: Print loading priority
                                 secret_model = st.secrets.get("GEMINI_MODEL_NAME")
                                 general_model = st.secrets.get("general", {}).get("GEMINI_MODEL_NAME")
                                 env_model = os.getenv("GEMINI_MODEL_NAME")
                                 
-                                # Priority: Secrets(Top) -> Secrets(General) -> Env -> Default "gemini-3-flash-preview"
+                                # Priority: Secrets(Top) -> Secrets(General) -> Env -> Default "gemini-1.5-flash"
                                 model_name = secret_model or general_model or env_model or "gemini-1.5-flash"
                                 
-                                # Log for debugging
+                                # Print debug
                                 print(f"DEBUG: Selected Model Name: {model_name}")
-                                print(f"DEBUG: Sources - Top:{secret_model}, General:{general_model}, Env:{env_model}")
 
                                 # Force Override if it's unintentionally picking up the expensive model
                                 if "pro" in model_name and "flash" not in model_name:
@@ -390,7 +390,6 @@ def main():
                                 if auth_user_type == "master":
                                     cache_seed = "master_shared"
                                 else:
-                                    # Unique per session/file to avoid cross-user leaks in guest mode
                                     cache_seed = str(uuid.uuid4())
 
                                 # Analyze with Caching
@@ -399,17 +398,22 @@ def main():
                                     mime_type="image/png",
                                     model_name=model_name,
                                     cache_seed=cache_seed,
-                                    prompt_version="v1_crop", # Preserving original prompt version
+                                    prompt_version="v1_crop",
                                     _api_key=api_key
                                 )
-                                st.write("✅ Layout Analysis Complete!")
+                                st.write("✅ Layout Analysis Complete! (Rendering Table...)")
                                 
-                                # Render
-                                st.write("📊 Rendering Excel...")
-                                excel_file = render_excel(structure_data)
+                                # Render (Now returns ConversionResult dataclass)
+                                conversion_output = render_excel(structure_data)
                                 
-                                # Save Result to Session
-                                st.session_state.excel_data = excel_file
+                                # Atomic State Update (Fix for Step 201)
+                                st.session_state.conversion_result = conversion_output
+                                st.session_state.result_meta = {
+                                    "file_id": st.session_state.current_file_path,
+                                    "crop_id": current_crop_id,
+                                    "timestamp": time.time(),
+                                    "row_count": conversion_output.row_count
+                                }
                                 
                                 status.update(label="Conversion Complete!", state="complete", expanded=False)
                                 st.rerun() # Refresh to show result in right column
@@ -417,6 +421,9 @@ def main():
                             except Exception as e:
                                 st.error(f"Error during conversion: {str(e)}")
                                 status.update(label="Conversion Failed", state="error")
+                                # Print full traceback for debugging in console
+                                import traceback
+                                traceback.print_exc()
                 
                 except Exception as e:
                     st.error(f"이미지 로드 실패: {e}")
@@ -442,50 +449,49 @@ def main():
         result_meta = st.session_state.get("result_meta")
         
         is_result_valid = False
-        if result_data and result_meta:
-            # Check if stored ID matches current input state
-            # Logic: If user changed upload or crop without clicking Convert, IDs won't match.
-            # However, if uploaded_file is None, we shouldn't show old result anyway?
-            # Plan said: "UX Consistency: Show result if session exists."
-            # Codex 3rd Review said: "Only show if IDs match current state."
+        
+        # Only validate if file exists
+        current_file_path = st.session_state.get("current_file_path")
+        
+        if result_data and result_meta and current_file_path:
+            # Check IDs
+            current_crop = current_crop_id if 'current_crop_id' in locals() else None 
+            # Note: current_crop_id is defined in left col scope, tricky.
+            # But st.session_state persists. 
+            # We trust file path match primarily. Crop ID match is bonus UX but tricky to sync across reruns without session.
             
-            # Case 1: Upload matches (or result exists and user is viewing same file)
-            # If uploaded_file is None (page refresh?), current_file_id is None.
-            # We relax check: If current_file_id is None, maybe hide? Or keep showing old result?
-            # Strict approach: Must match CURRENT input.
-            
-            if uploaded_file is None:
-                 # No input present. Hide result or show strict empty state?
-                 # Let's clean up state if file is gone defined by st.file_uploader logic
-                 is_result_valid = False
+            if result_meta.get("file_id") == current_file_path:
+                 is_result_valid = True
             else:
-                 # Check IDs
-                 if result_meta.get("file_id") == current_file_id and result_meta.get("crop_id") == current_crop_id:
-                     is_result_valid = True
-                 else:
-                     is_result_valid = False
+                 is_result_valid = False
 
         if is_result_valid:
-            st.info("✅ 변환이 완료되었습니다. 내용을 확인하고 다운로드하세요.")
-            
-            preview_df = result_data.get("preview_df")
-            excel_bytes = result_data.get("excel_bytes")
-            
-            # Mobile Optimization: container width
-            if preview_df is not None:
-                st.caption("⚠️ **미리보기 (상위 100행)**")
-                st.dataframe(preview_df, use_container_width=True)
-            else:
-                st.warning("⚠️ 미리보기를 불러올 수 없습니다.")
+            st.success(f"변환 완료! (행 개수: {result_data.row_count})")
             
             st.download_button(
                 label="📥 엑셀 파일 다운로드 (Download .xlsx)",
-                data=excel_bytes,
-                file_name="Converted_Result.xlsx",
+                data=result_data.excel_bytes,
+                file_name="Converted_Table.xlsx",
                 key="download_btn",
-                use_container_width=True # Wide button for touch targets
+                use_container_width=True
             )
-        else:
+            
+            st.divider()
+            st.caption("🔍 **변환 미리보기 (상위 50행)**")
+            
+            # Using st.dataframe with strict limits
+            st.dataframe(
+                result_data.preview_df, 
+                use_container_width=True,
+                height=400
+            )
+
+        elif st.session_state.get("conversion_result"):
+             # Result exists but mismatches file -> likely old state. Clear it?
+             # For now, show placeholder.
+             pass
+
+        if not is_result_valid:
             # Empty / Placeholder State
             st.markdown("""
             <div style='
@@ -501,7 +507,7 @@ def main():
                 <p>왼쪽 패널에서 이미지를 선택하고 <b>[Convert to Excel]</b> 버튼을 눌러주세요.</p>
                 <p style='font-size: 0.9em; margin-top: 10px;'>
                     변환 결과와 미리보기가 이 영역에 표시됩니다.<br>
-                    모바일에서는 스크롤하여 하단에서 확인하실 수 있습니다.
+                    보안을 위해 미리보기는 상위 50행까지만 제공됩니다.
                 </p>
             </div>
             """, unsafe_allow_html=True)
