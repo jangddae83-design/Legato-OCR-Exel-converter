@@ -13,4 +13,5 @@
     - **Config Fix**: Downgraded model to `gemini-2.0-flash-exp` to resolve logic & quota errors.
 - **Verification**: Verified via restart & manual walkthrough.
 - **Update**: Upgraded model to `gemini-3-flash-preview` per user request.
-- **Status**: Ready to commit.
+- **Update**: Upgraded model to `gemini-3-flash` (Stable) for better performance and cost efficiency.
+- **Status**: Committing changes.
