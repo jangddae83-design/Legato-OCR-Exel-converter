@@ -63,3 +63,4 @@ tzdata==2025.3
 uritemplate==4.2.0
 urllib3==2.6.2
 streamlit-cropper
+pymupdf>=1.23.0

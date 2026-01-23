@@ -3,8 +3,6 @@ import os
 import sys
 import io
 import uuid
-import tempfile
-import shutil
 import time
 from pathlib import Path
 from PIL import Image, ImageOps
@@ -14,140 +12,16 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.core.analyzer_service import analyze_image
 from src.core.excel_service import render_excel
-from src.utils import auth_utils, image_utils
+from src.utils import auth_utils, file_utils, pdf_utils
 from streamlit_cropper import st_cropper
-
-# --- Security Constants ---
-MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
-MAX_PIXELS = 20_000_000           # 20MP (e.g. approx 4k x 5k)
-ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "MPO"}
-
-# --- Security Helpers ---
-def copy_limited(src, dst, limit):
-    """
-    Copy data from src to dst, enforcing a byte limit to prevent DoS.
-    """
-    total = 0
-    while True:
-        chunk = src.read(1024 * 1024) # 1MB chunk
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > limit:
-            raise ValueError(f"File size limit exceeded ({limit / 1024 / 1024}MB).")
-        dst.write(chunk)
-    return total
-
-def validate_image_security(path):
-    """
-    Enforce strict image validation:
-    1. Pixel Bomb Protection (Decompression Bomb)
-    2. Format Verification (Magic Numbers via Pillow)
-    """
-    # Protect against Decompression Bomb
-    Image.MAX_IMAGE_PIXELS = MAX_PIXELS 
-    
-    try:
-        # 1. Format & Structure Check
-        with Image.open(path) as img:
-            if img.format not in ALLOWED_FORMATS:
-                raise ValueError(f"지원하지 않는 포맷입니다: {img.format}\n(허용: JPEG, PNG, WEBP, MPO)\n💡 아이폰 HEIC 사진은 JPG로 설정하여 다시 찍거나 변환해주세요.")
-            
-            # Simulate loading to catch truncated/corrupt files (Verify only checks headers)
-            img.verify() 
-        
-        # 2. Detail Check (Dimensions/Pixels) - Re-open required after verify()
-        with Image.open(path) as img:
-            w, h = img.size
-            if w * h > MAX_PIXELS:
-                raise ValueError(f"이미지 해상도가 너무 큽니다. (limit: {MAX_PIXELS/1_000_000}MP)")
-                
-    except Exception as e:
-        raise ValueError(f"이미지 보안 검증 실패: {str(e)}")
-
-# --- Caching for Image Normalization ---
-@st.cache_data(max_entries=50, ttl=3600) 
-def load_normalized_image_bytes(image_bytes: bytes) -> bytes:
-    """
-    입력 바이트를 받아 EXIF 회전 및 RGB 변환을 거친 정규화된 이미지의 바이트(PNG)를 반환합니다.
-    PIL 객체 자체를 캐싱하는 것보다 bytes 캐싱이 Pickling 이슈에서 안전합니다.
-    """
-    image = Image.open(io.BytesIO(image_bytes))
-    image = ImageOps.exif_transpose(image) # EXIF 회전 반영
-    image = image.convert("RGB") # 항상 RGB로 변환
-    
-    output = io.BytesIO()
-    image.save(output, format="PNG")
-    return output.getvalue()
-
-# --- Configuration ---
-st.set_page_config(
-    page_title="Smart Layout OCR (S-LOE)",
-    page_icon="📄",
-    layout="wide" # CHANGED: Wide mode for split view
-)
-
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header { font-family: 'Inter', sans-serif; color: #1a73e8; text-align: center; font-weight: 700; }
-    .sub-header { font-family: 'Inter', sans-serif; color: #5f6368; text-align: center; margin-bottom: 2rem; }
-    .stButton>button { background-color: #1a73e8; color: white; border-radius: 20px; padding: 0 20px; width: 100%; } /* Button full width in col */
-    .error-box { padding: 1rem; background-color: #ffebee; border-radius: 8px; color: #c62828; }
-    
-    /* File Uploader Customization */
-    [data-testid="stFileUploader"] {
-        padding-top: 0; /* Align closely with container top */
-    }
-    
-    /* Target the Dropzone Area to match result panel size (Approx 314px) */
-    [data-testid="stFileUploaderDropzone"] {
-        min-height: 314px; /* Matches right panel height */
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center; 
-        border: 1px dashed #ccc; /* Ensure border integration */
-        border-radius: 8px;
-    }
-
-    /* Hide the standard file list to "replace" it with our Custom Header */
-    [data-testid="stFileUploader"] ul {
-        display: none;
-    }
-
-    /* Hide default limit text and inject custom message */
-    [data-testid="stFileUploaderDropzoneInstructions"] > div:nth-child(1) > span:nth-child(2) {
-       visibility: hidden;
-       height: 0;
-       display: block;
-    }
-    
-    [data-testid="stFileUploaderDropzoneInstructions"] > div:nth-child(1) > span:nth-child(2)::before {
-        content: "지원 형식: PNG, JPG, JPEG, WEBP (최대 20MB)";
-        visibility: visible;
-        display: block;
-        height: auto;
-        color: #757575; 
-        font-size: 14px;
-        margin-top: 10px; 
-    }
-</style>
-""", unsafe_allow_html=True)
 
 # --- Caching Wrapper ---
 @st.cache_data(show_spinner=False, ttl=3600, max_entries=100)
 def get_cached_analysis(image_bytes: bytes, mime_type: str, model_name: str, cache_seed: str, prompt_version: str, _api_key: str):
     """
     Cached wrapper for image analysis.
-    - image_bytes, mime_type: The content.
-    - model_name: The model version.
-    - cache_seed: "master_shared" OR HMAC(api_key). Ensures cached data is strictly isolated per user/scope.
-    - prompt_version: Manual cache invalidation key.
-    - _api_key: Excluded from cache key (starts with underscore), used only for API call.
     """
     return analyze_image(image_bytes, mime_type=mime_type, model_name=model_name, api_key=_api_key)
-
 
 # --- Helper Callback ---
 def init_session_state():
@@ -173,81 +47,141 @@ def init_session_state():
     if "cropping" not in st.session_state:
         st.session_state.cropping = False
 
+    # --- PDF State ---
+    if "is_pdf" not in st.session_state:
+        st.session_state.is_pdf = False
+    if "pdf_page_count" not in st.session_state:
+        st.session_state.pdf_page_count = 0
+    if "current_page_idx" not in st.session_state:
+        st.session_state.current_page_idx = 0
+
 def handle_file_upload_secure():
     """
-    Handle file upload with 7-Layer Defense Strategy (Enterprise Grade).
+    Handle file upload with enhanced security via file_utils.
     """
-    # 0. Cleanup Old State (Strict Cleanup)
-    if st.session_state.current_file_path and os.path.exists(st.session_state.current_file_path):
-        try:
-            os.remove(st.session_state.current_file_path)
-        except OSError:
-            pass # Logging recommended in production
-    
+    # 0. Cleanup Old Session Files if any (Optional policy)
+    # For this simple app, we just ensure we have a fresh start for the new file.
+    if st.session_state.current_file_path:
+        p = Path(st.session_state.current_file_path)
+        if p.exists():
+            # Try to remove the parent UUID folder of the file
+            file_utils.safe_remove(p.parent)
+
     uploaded = st.session_state.get(st.session_state.uploader_key)
     
     if uploaded:
-        # Layer 1: Private Temp Dir (Symlink/TOCTOU Prevention)
-        with tempfile.TemporaryDirectory() as temp_dir:
-            try:
-                # Layer 2: Generated Filename (UUID) - Prevent Path Traversal
-                safe_name = f"{uuid.uuid4()}.tmp"
-                temp_path = os.path.join(temp_dir, safe_name)
+        try:
+            # 1. Save File (Secure Copy)
+            saved_path = file_utils.save_uploaded_file(uploaded)
+            
+            # 2. Validate Type (Image vs PDF)
+            file_type = file_utils.validate_file(saved_path)
+            
+            # 3. PDF Processing
+            if file_type == "pdf":
+                # PDF Validation
+                pdf_utils.validate_pdf(saved_path)
                 
-                # Layer 3: Stream Copy with Limit (DoS Prevention)
-                with open(temp_path, 'wb') as dst:
-                    uploaded.seek(0)
-                    copy_limited(uploaded, dst, MAX_FILE_SIZE)
-                
-                # Layer 4 & 5: Pixel Bomb & Format Whitelisting (Pillow)
-                validate_image_security(temp_path)
-                
-                # Layer 6: Atomic Save (Move to Persistent Temp)
-                # Note: We move to system temp because 'temp_dir' is wiped after 'with' block
-                final_path = os.path.join(tempfile.gettempdir(), f"legato_{safe_name}")
-                shutil.move(temp_path, final_path)
-                
-                # Update State
-                st.session_state.current_file_path = final_path
-                st.session_state.current_file_name = uploaded.name
-                st.session_state.ui_step = "process"
-                st.session_state.error_msg = None
-                
-            except Exception as e:
-                # Layer 7: Error State & implicit cleanup (temp_dir wipes itself)
-                st.session_state.error_msg = f"업로드 실패 ({str(e)})"
-                st.session_state.ui_step = "error"
+                # Get Info
+                info = pdf_utils.get_pdf_info(saved_path)
+                st.session_state.is_pdf = True
+                st.session_state.pdf_page_count = info["page_count"]
+                st.session_state.current_page_idx = 0
+            else:
+                st.session_state.is_pdf = False
+                st.session_state.pdf_page_count = 0
+            
+            # Update State
+            st.session_state.current_file_path = str(saved_path)
+            st.session_state.current_file_name = uploaded.name
+            st.session_state.ui_step = "process"
+            st.session_state.error_msg = None
+            
+        except Exception as e:
+            # Error State
+            st.session_state.error_msg = f"Error: {str(e)}"
+            st.session_state.ui_step = "error"
+            # Cleanup failed file if path exists
+            if 'saved_path' in locals() and saved_path.exists():
+                 file_utils.safe_remove(saved_path.parent)
 
 def handle_remove_file():
     """Reset to upload state and cleanup resources."""
-    if st.session_state.current_file_path and os.path.exists(st.session_state.current_file_path):
-        try:
-            os.remove(st.session_state.current_file_path)
-        except OSError:
-            pass
+    if st.session_state.current_file_path:
+        p = Path(st.session_state.current_file_path)
+        if p.exists():
+            file_utils.safe_remove(p.parent)
             
     st.session_state.current_file_path = None
     st.session_state.current_file_name = None
     st.session_state.excel_data = None
     st.session_state.cropping = False
     st.session_state.error_msg = None
+    st.session_state.is_pdf = False
     
     # Reset Uploader Widget
     st.session_state.uploader_key = str(uuid.uuid4())
     st.session_state.ui_step = "upload"
+
 # --- Main App ---
 def main():
+    # Startup Cleanup (Run once per thread/process approx)
+    # In Streamlit, this runs on every script rerun, but the function inside has checks.
+    # To be strictly 'once', we would need a lock or singleton, but simplified check is okay.
+    file_utils.cleanup_stale_files(file_utils.get_session_temp_dir())
+
+    st.set_page_config(
+        page_title="Smart Layout OCR (S-LOE)",
+        page_icon="📄",
+        layout="wide"
+    )
+
+    # Custom CSS
+    st.markdown("""
+    <style>
+        .main-header { font-family: 'Inter', sans-serif; color: #1a73e8; text-align: center; font-weight: 700; }
+        .sub-header { font-family: 'Inter', sans-serif; color: #5f6368; text-align: center; margin-bottom: 2rem; }
+        .stButton>button { background-color: #1a73e8; color: white; border-radius: 20px; padding: 0 20px; width: 100%; } 
+        .error-box { padding: 1rem; background-color: #ffebee; border-radius: 8px; color: #c62828; }
+        
+        [data-testid="stFileUploader"] { padding-top: 0; }
+        [data-testid="stFileUploaderDropzone"] {
+            min-height: 314px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            border: 1px dashed #ccc;
+            border-radius: 8px;
+        }
+        [data-testid="stFileUploader"] ul { display: none; }
+        [data-testid="stFileUploaderDropzoneInstructions"] > div:nth-child(1) > span:nth-child(2) {
+           visibility: hidden;
+           height: 0;
+           display: block;
+        }
+        [data-testid="stFileUploaderDropzoneInstructions"] > div:nth-child(1) > span:nth-child(2)::before {
+            content: "지원 형식: PNG, JPG, JPEG, WEBP, PDF (Max 20MB)";
+            visibility: visible;
+            display: block;
+            height: auto;
+            color: #757575; 
+            font-size: 14px;
+            margin-top: 10px; 
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.markdown("<h1 class='main-header'>Smart Layout OCR to Excel</h1>", unsafe_allow_html=True)
     st.markdown("<p class='sub-header'>Gemini 2.5 Flash Lite Powered Document Digitization</p>", unsafe_allow_html=True)
 
-    # 1. Initialize Auth State & App State
+    # 1. Initialize Auth & State
     auth_utils.init_auth_state()
     init_session_state()
 
-    # 2. Sidebar Login
+    # 2. Sidebar
     with st.sidebar:
         st.header("🔑 Authentication")
-        
         if st.session_state["auth_status"]:
             st.success(f"Logged in as: {st.session_state['auth_user_type'].upper()}")
             if st.button("Logout"):
@@ -256,76 +190,80 @@ def main():
             with st.form("login_form"):
                 user_input = st.text_input("Enter App Password or API Key", type="password")
                 submitted = st.form_submit_button("Login")
-                
                 if submitted:
                     auth_utils.login(user_input)
-            
             st.info("💡 **Password**: Use for unrestricted access.\n💡 **API Key**: Use your own `AIza...` key.")
 
-    # 3. Main Content (Protected)
+    # 3. Validation
     if not st.session_state["auth_status"]:
-        st.markdown("""
-        <div style='text-align: center; margin-top: 50px;'>
-            <h3>🔒 Access Restricted</h3>
-            <p>Please login using the sidebar to verify your access.</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("<div style='text-align: center; margin-top: 50px;'><h3>🔒 Access Restricted</h3></div>", unsafe_allow_html=True)
         return
 
-    # 4. Authenticated UI - Split Layout
+    # 4. Split Layout
     col1, col2 = st.columns([1, 1], gap="medium")
 
-    # --- LEFT COLUMN: State Machine UI ---
     with col1:
-        st.write("### 📤 문서 이미지 업로드")
+        st.write("### 📤 문서 업로드")
         
-        # State: UPLOAD
         if st.session_state.ui_step == "upload":
             with st.container(border=True):
                 st.file_uploader(
-                    "Upload Document Image", 
-                    type=['png', 'jpg', 'jpeg', 'webp'],
+                    "Upload Document", 
+                    type=['png', 'jpg', 'jpeg', 'webp', 'pdf'],
                     key=st.session_state["uploader_key"],
                     on_change=handle_file_upload_secure
                 )
-                st.info("지원 형식: PNG, JPG, WEBP (Max 20MB)")
+                st.info("지원 형식: PNG, JPG, WEBP, PDF (Max 20MB)")
 
-        # State: PROCESS
         elif st.session_state.ui_step == "process":
-            # Self-Healing: Check if file still exists
             if not st.session_state.current_file_path or not os.path.exists(st.session_state.current_file_path):
-                st.warning("⚠️ 파일이 만료되었거나 삭제되었습니다. 다시 업로드해주세요.")
+                st.warning("⚠️ 파일이 만료되었습니다.")
                 handle_remove_file()
                 st.rerun()
 
             with st.container(border=True):
-                # 1. Custom Header (File Name + Remove Button)
                 col_h1, col_h2 = st.columns([0.85, 0.15])
                 with col_h1:
                     st.write(f"📄 **{st.session_state.current_file_name}**")
                 with col_h2:
-                    if st.button("🗑️", help="파일 제거 및 초기화"):
+                    if st.button("🗑️", help="파일 제거"):
                         handle_remove_file()
                         st.rerun()
 
-                # 2. Image Processing & Preview
                 try:
-                    # Security: Load from Secure Temp Path
-                    pil_image = Image.open(st.session_state.current_file_path)
-                    
+                    # --- Image / PDF Rendering Logic ---
+                    pil_image = None
+                    file_path_obj = Path(st.session_state.current_file_path)
+
+                    if st.session_state.is_pdf:
+                        # PDF Page Selector
+                        total_pages = st.session_state.pdf_page_count
+                        if total_pages > 1:
+                            page_num = st.slider("페이지 선택 (Page)", 1, total_pages, value=st.session_state.current_page_idx + 1)
+                            st.session_state.current_page_idx = page_num - 1
+                        else:
+                            st.session_state.current_page_idx = 0
+                            st.caption("단일 페이지 PDF (Page 1/1)")
+
+                        # Render
+                        img_bytes = pdf_utils.render_pdf_page(file_path_obj, st.session_state.current_page_idx)
+                        pil_image = Image.open(io.BytesIO(img_bytes))
+                    else:
+                        # Standard Image
+                        pil_image = Image.open(file_path_obj)
+
                     st.image(pil_image, use_container_width=True)
 
-                    # 3. Controls (Crop)
-                    use_crop = st.toggle("✂️ 자르기 모드 (Crop Mode)", value=st.session_state.cropping, key="toggle_crop")
-                    st.session_state.cropping = use_crop # Sync state
+                    # --- Crop & Process ---
+                    use_crop = st.toggle("✂️ 자르기 모드 (Crop)", value=st.session_state.cropping, key="toggle_crop")
+                    st.session_state.cropping = use_crop
                     
                     cropped_img = None
                     current_crop_id = None
                     
                     if use_crop:
-                        st.info("💡 박스 모서리를 드래그하여 변환할 **표(Table)** 영역을 선택하세요.")
-                        # Generate a unique key for cropper based on file path to avoid conflicts
-                        cropper_key = f"cropper_{os.path.basename(st.session_state.current_file_path)}"
+                        # Unique key per page to reset crop box when page changes
+                        cropper_key = f"cropper_{file_path_obj.name}_{st.session_state.current_page_idx}"
                         
                         cropped_box = st_cropper(
                             img_file=pil_image,
@@ -346,169 +284,105 @@ def main():
                         else:
                             cropped_img = pil_image
                     else:
-                        cropped_img = pil_image 
-                    
+                        cropped_img = pil_image
+
                     st.divider()
 
-                    # 4. Action Button
+                    # Convert Button
+                    # Prevent Double Click (Optimization)
                     if st.button("Convert to Excel", use_container_width=True):
-                        # Reset Result State (Use unified state)
                         st.session_state.conversion_result = None
                         st.session_state.result_meta = None
                         
                         with st.status("Processing...", expanded=True) as status:
-                            st.write("🔍 Analyzing Layout with Gemini...")
-                            
+                            st.write("🔍 Analyzing Layout...")
                             try:
-                                # Prepare Image Bytes for API
                                 img_byte_arr = io.BytesIO()
                                 cropped_img.save(img_byte_arr, format='PNG')
                                 final_image_bytes = img_byte_arr.getvalue()
 
-                                # API Call Logic
-                                api_key = st.session_state["api_key"]
-                                
-                                # Robust Model Name Fetching 
+                                # Model selection logic
                                 secret_model = st.secrets.get("GEMINI_MODEL_NAME")
-                                general_model = st.secrets.get("general", {}).get("GEMINI_MODEL_NAME")
                                 env_model = os.getenv("GEMINI_MODEL_NAME")
+                                model_name = secret_model or env_model or "gemini-2.5-flash-lite"
                                 
-                                # Priority: Secrets(Top) -> Secrets(General) -> Env -> Default "gemini-1.5-flash"
-                                model_name = secret_model or general_model or env_model or "gemini-2.5-flash-lite"
+                                cache_seed = "master_shared" if st.session_state["auth_user_type"] == "master" else str(uuid.uuid4())
                                 
-                                # Print debug
-                                print(f"DEBUG: Selected Model Name: {model_name}")
-
-                                # Force Override if it's unintentionally picking up the expensive model
-                                if "pro" in model_name and "flash" not in model_name:
-                                    print(f"WARNING: 'pro' model detected ({model_name}). Fallback to 'gemini-2.5-flash-lite' for safety.")
-                                    model_name = "gemini-2.5-flash-lite"
-                                
-                                auth_user_type = st.session_state["auth_user_type"]
-                                
-                                # Determine Cache Seed (Security: Isolation)
-                                if auth_user_type == "master":
-                                    cache_seed = "master_shared"
-                                else:
-                                    cache_seed = str(uuid.uuid4())
-
-                                # Analyze with Caching
                                 structure_data = get_cached_analysis(
                                     image_bytes=final_image_bytes,
                                     mime_type="image/png",
                                     model_name=model_name,
                                     cache_seed=cache_seed,
                                     prompt_version="v1_crop",
-                                    _api_key=api_key
+                                    _api_key=st.session_state["api_key"]
                                 )
-                                st.write("✅ Layout Analysis Complete! (Rendering Table...)")
                                 
-                                # Render (Now returns ConversionResult dataclass)
+                                st.write("✅ Layout Analysis Complete!")
                                 conversion_output = render_excel(structure_data)
                                 
-                                # Atomic State Update (Fix for Step 201)
                                 st.session_state.conversion_result = conversion_output
                                 st.session_state.result_meta = {
                                     "file_id": st.session_state.current_file_path,
+                                    "page_idx": st.session_state.current_page_idx,
                                     "crop_id": current_crop_id,
-                                    "timestamp": time.time(),
-                                    "row_count": conversion_output.row_count
+                                    "timestamp": time.time()
                                 }
-                                
                                 status.update(label="Conversion Complete!", state="complete", expanded=False)
-                                st.rerun() # Refresh to show result in right column
-                                
+                                st.rerun()
+
                             except Exception as e:
-                                st.error(f"Error during conversion: {str(e)}")
-                                status.update(label="Conversion Failed", state="error")
-                                # Print full traceback for debugging in console
-                                import traceback
-                                traceback.print_exc()
-                
+                                st.error(f"Conversion Error: {str(e)}")
+                                status.update(label="Failed", state="error")
+
                 except Exception as e:
-                    st.error(f"이미지 로드 실패: {e}")
-                    # Fallback to upload if critical error
-                    if st.button("다시 업로드"):
+                    st.error(f"Load Error: {str(e)}")
+                    if st.button("Reset"):
                         handle_remove_file()
                         st.rerun()
 
-        # State: ERROR
         elif st.session_state.ui_step == "error":
             with st.container(border=True):
-                st.error(f"❌ {st.session_state.error_msg or '알 수 없는 오류'}")
-                if st.button("메인으로 돌아가기"):
+                st.error(f"❌ {st.session_state.error_msg}")
+                if st.button("Back"):
                     handle_remove_file()
                     st.rerun()
 
-    # --- RIGHT COLUMN: Result ---
     with col2:
-        st.write("### 📊 엑셀 변환 결과")
+        st.write("### 📊 결과 (Result)")
         
-        # ID Matching Logic for Safe Rendering
         result_data = st.session_state.get("conversion_result")
         result_meta = st.session_state.get("result_meta")
         
-        is_result_valid = False
+        is_valid = False
+        if result_data and result_meta and st.session_state.current_file_path:
+             # Validate File ID and Page Index
+             if (result_meta.get("file_id") == st.session_state.current_file_path and 
+                 result_meta.get("page_idx", 0) == st.session_state.get("current_page_idx", 0)):
+                 is_valid = True
         
-        # Only validate if file exists
-        current_file_path = st.session_state.get("current_file_path")
-        
-        if result_data and result_meta and current_file_path:
-            # Check IDs
-            current_crop = current_crop_id if 'current_crop_id' in locals() else None 
-            # Note: current_crop_id is defined in left col scope, tricky.
-            # But st.session_state persists. 
-            # We trust file path match primarily. Crop ID match is bonus UX but tricky to sync across reruns without session.
-            
-            if result_meta.get("file_id") == current_file_path:
-                 is_result_valid = True
-            else:
-                 is_result_valid = False
-
-        if is_result_valid:
-            st.success(f"변환 완료! (행 개수: {result_data.row_count})")
-            
+        if is_valid:
+            st.success(f"변환 완료! ({result_data.row_count} Rows)")
             st.download_button(
-                label="📥 엑셀 파일 다운로드 (Download .xlsx)",
+                label="📥 Download Excel (.xlsx)",
                 data=result_data.excel_bytes,
                 file_name="Converted_Table.xlsx",
                 key="download_btn",
                 use_container_width=True
             )
-            
             st.divider()
-            st.caption("🔍 **변환 미리보기 (상위 50행)**")
+            st.caption("Preivew (Top 50 Rows)")
+            st.dataframe(result_data.preview_df, use_container_width=True, height=400)
             
-            # Using st.dataframe with strict limits
-            st.dataframe(
-                result_data.preview_df, 
-                use_container_width=True,
-                height=400
-            )
+            # AGPL License Notice (Mandatory update)
+            st.divider()
+            st.caption("Powered by **PyMuPDF** (AGPL) & **Google Gemini**")
 
-        elif st.session_state.get("conversion_result"):
-             # Result exists but mismatches file -> likely old state. Clear it?
-             # For now, show placeholder.
-             pass
-
-        if not is_result_valid:
-            # Empty / Placeholder State
+        if not is_valid:
             st.markdown("""
-            <div style='
-                text-align: center; 
-                padding: 40px 20px; 
-                border: 2px dashed #e0e0e0; 
-                border-radius: 10px; 
-                color: #757575;
-                margin-top: 20px;
-            '>
+            <div style='text-align: center; padding: 40px 20px; border: 2px dashed #e0e0e0; border-radius: 10px; color: #757575; margin-top: 20px;'>
                 <div style='font-size: 40px; margin-bottom: 10px;'>👈</div>
-                <h4>변환할 이미지를 업로드하세요</h4>
-                <p>왼쪽 패널에서 이미지를 선택하고 <b>[Convert to Excel]</b> 버튼을 눌러주세요.</p>
-                <p style='font-size: 0.9em; margin-top: 10px;'>
-                    변환 결과와 미리보기가 이 영역에 표시됩니다.<br>
-                    보안을 위해 미리보기는 상위 50행까지만 제공됩니다.
-                </p>
+                <h4>Ready to Convert</h4>
+                <p>Upload a file and click [Convert to Excel].</p>
             </div>
             """, unsafe_allow_html=True)
 

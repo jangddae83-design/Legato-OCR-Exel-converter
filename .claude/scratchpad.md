@@ -34,3 +34,13 @@
 - **Fix**: Resolved `MergedCell` Read-Only Error during Excel conversion.
     - **Logic**: Implemented "Sort & Occupancy Check" strategy in `excel_service.py` to prevent overlapping merges from AI hallucinations.
     - **Stability**: Added MergedCell type check in column width adjustment to prevent runtime crashes.
+- **Feat**: PDF Support Implementation (2026-01-23)
+    - **Engine**: Added `pymupdf` integration for reliable PDF rendering.
+    - **Architecture**: Refactored `app.py` logic into `src/utils/file_utils.py` (Lifecycle, Security) and `pdf_utils.py` (PDF Logic).
+    - **Security**:
+        - Enforced Page Limit (Max 10) to prevent DoS.
+        - Implemented `MAX_PIXELS` (80MP) check with auto-downscaling validation.
+        - Added JavaScript detection in PDF for security.
+        - Applied Lazy Cleanup for Windows File Lock compatibility.
+    - **UX**: Added PDF Page Selector Slider.
+    - **License**: Added AGPL notice for PyMuPDF.
