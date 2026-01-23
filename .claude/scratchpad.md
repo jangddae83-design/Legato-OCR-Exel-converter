@@ -44,3 +44,5 @@
         - Applied Lazy Cleanup for Windows File Lock compatibility.
     - **UX**: Added PDF Page Selector Slider.
     - **License**: Added AGPL notice for PyMuPDF.
+- **Fix**: Improved Table Recognition Accuracy.
+    - **Prompt Engineering**: Enhanced `analyzer_service.py` to strictly enforce grid visualization and column spreading, resolving issues where content was collapsed into a single column.

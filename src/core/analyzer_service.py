@@ -20,21 +20,29 @@ MOCK_RESPONSE = {
 }
 
 ANALYSIS_PROMPT = """
-Analyze this image containing a table working as a Optical Character Recognition (OCR) engine. 
-Extract the table structure and content into a JSON format.
-Return an object satisfying the `TableLayout` schema.
+You are an expert Optical Character Recognition (OCR) engine specialized in Table and Grid reconstruction.
+Analyze the provided image and extract the structure into a JSON object matching the `TableLayout` schema.
 
-For each cell:
-- Identify the text content.
-- Identify the starting row_index and col_index (0-based).
-- Identify row_span and col_span. You MUST provide these values for every cell (use 1 for single cells).
-- If a cell is merged, only output it once with the correct span.
+**CORE OBJECTIVE**:
+Reconstruct the EXACT visual row and column structure of the table, calendar, or grid in the image.
+Do NOT output a simple list of text. You MUST infer the 2D grid coordinates.
 
-CRITICAL INSTRUCTIONS:
-- Do NOT return `null` for any field.
-- Use an empty string `""` for cells with no text.
-- Always provide integer values for `row_span` and `col_span`. Default to 1 if unsure.
-- Ensure all visible text is captured.
+**CRITICAL INSTRUCTIONS**:
+1. **Grid Inference**: 
+   - Visualize hidden grid lines especially for designs like **Calendars**, **Forms**, or **Reports**.
+   - Items visually aligned vertically MUST have the same `col_index`.
+   - Items visually aligned horizontally MUST have the same `row_index`.
+2. **Coordinates**:
+   - `row_index`: 0-based index from top to bottom.
+   - `col_index`: 0-based index from left to right.
+   - **WARNING**: Do NOT assign `col_index: 0` to all cells. Spread them out across columns as they appear visually.
+3. **Spans**: 
+   - Use `row_span` and `col_span` for headers or large blocks of text that cover multiple grid cells.
+   - Default to 1 if the cell occupies a single grid unit.
+4. **Content**:
+   - Capture ALL visible text.
+   - Do NOT return `null`. Use empty string `""` for no text.
+   - Ensure `row_span` and `col_span` are always integers >= 1.
 """
 
 def analyze_image(image_bytes: bytes, mime_type: str = "image/png", model_name: str = "gemini-2.5-flash-lite", api_key: Optional[str] = None) -> TableLayout:
